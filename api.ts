@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Part, Type, Chat } from "@google/genai";
+import { GoogleGenAI, Part, Type, Chat, LiveSession, LiveServerMessage, Modality, Blob } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -37,16 +37,21 @@ export interface ChatMessage {
     text: string;
 }
 
+export interface LiveCallbacks {
+  onopen: () => void;
+  onmessage: (message: LiveServerMessage) => void;
+  onerror: (event: ErrorEvent) => void;
+  onclose: (event: CloseEvent) => void;
+}
 
-// --- API INITIALIZATION ---
-// WARNING: Storing API keys client-side is insecure. In a production application,
-// this entire file should be moved to a backend proxy (e.g., a Vercel Function)
-// to protect the API key.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+
+// --- API INITIALIZATION & HELPERS ---
+
+// The API key is read from the environment variable `process.env.API_KEY`.
+// This is configured in your hosting environment's settings.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 let chat: Chat | null = null;
 
-
-// --- API HELPERS ---
 
 /**
  * Converts a file to a Gemini-compatible Part object.
@@ -85,24 +90,75 @@ const getPromptForMode = (mode: Mode): string => {
     }
 }
 
+// --- AUDIO HELPER FUNCTIONS FOR LIVE API ---
+
+/** Encodes a Uint8Array into a Base64 string. */
+export function encode(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/** Creates a Gemini-compatible Blob from raw audio data. */
+export function createBlob(data: Float32Array): Blob {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  for (let i = 0; i < l; i++) {
+    int16[i] = data[i] * 32768;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    mimeType: 'audio/pcm;rate=16000',
+  };
+}
+
+/** Decodes a Base64 string into a Uint8Array. */
+export function decode(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Decodes raw PCM audio data into an AudioBuffer for playback. */
+export async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
+
+
 // --- API FUNCTIONS ---
 
 /**
  * Generates a study plan by analyzing user-uploaded files.
+ * This also initializes the chat session for follow-up questions.
  */
 export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<AnalysisResult> => {
     const fileParts = await Promise.all(files.map(file => fileToGenerativePart(file)));
     const prompt = getPromptForMode(mode);
-    
-    // Initialize a new chat session for this study plan
-    const systemInstruction = "You are an expert study assistant. Your primary role is to answer questions based *only* on the documents provided by the user. Do not use external knowledge unless the user explicitly asks for it. When asked a question, first state which document your answer is from (e.g., 'According to your syllabus...'), then provide a clear and concise answer.";
-    const contents = [...fileParts, {text: "Here are my study materials."}];
 
-    chat = ai.chats.create({
-        model: 'gemini-2.5-flash',
-        config: { systemInstruction },
-        history: [{ role: 'user', parts: contents }]
-    });
+    // Combine files and prompt into a single request for the `generateContent` call.
+    const requestParts = [...fileParts, { text: prompt }];
 
     const responseSchema = {
         type: Type.OBJECT,
@@ -125,27 +181,79 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
             }
         }
     };
-
+    
+    // Use a single, robust `generateContent` call to get the study plan.
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: [prompt, ...fileParts],
+        contents: { parts: requestParts },
         config: {
             responseMimeType: 'application/json',
             responseSchema: responseSchema,
         },
     });
-    
+
     const resultText = response.text;
     if (!resultText) throw new Error("Received an empty response from the AI.");
-    
+
     const result = JSON.parse(resultText);
     if (!result || !Array.isArray(result.study_these)) {
         console.error("Invalid data structure received:", result);
         throw new Error("The AI returned data in an unexpected format.");
     }
     
+    // --- CHAT INITIALIZATION ---
+    // Now that we have the first successful interaction, we can initialize the chat session.
+    // The history will be the user's initial request (files + prompt) and the model's response (the plan).
+    const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the documents provided by the user in our initial interaction: specifically, the study notes about the topic being discussed. The topic is: ${result.study_these.map(t => t.topic).join(', ')}. Do not use external knowledge unless the user explicitly asks for it. When asked a question, first state which document your answer is from (e.g., 'According to your syllabus...'), then provide a clear and concise answer.`;
+
+    const history = [
+        { role: 'user', parts: requestParts },
+        { role: 'model', parts: [{ text: resultText }] }
+    ];
+
+    chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction },
+        history: history,
+    });
+    
     return result;
 };
+
+/**
+ * Connects to the Live API for a real-time AI Tutor session.
+ */
+export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<LiveSession> => {
+    const systemInstruction = `You are an enthusiastic and patient AI study tutor named Cramm. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
+
+**Your Persona:**
+- **Encouraging:** Start with a warm welcome like, "Hey there! I'm Cramm, your personal tutor for ${topic.topic}. I'm excited to help you crush this! What's on your mind?"
+- **Interactive:** Ask questions to check for understanding (e.g., "Does that make sense?", "Can you explain that back to me in your own words?").
+- **Focused:** Stick to the provided study notes for this topic. If a question is outside the notes, gently guide them back by saying something like, "That's a great question! For now, let's focus on what's in your study materials to make sure we've got that covered for your exam."
+- **Socratic:** Instead of just giving answers, try to guide the student to the answer themselves.
+- **Concise:** Keep your answers clear and to the point.
+
+**Context:** The student has these notes available:
+${topic.notes}
+`;
+
+    const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks: callbacks,
+        config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+            },
+            systemInstruction: systemInstruction,
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+        },
+    });
+
+    return sessionPromise;
+}
+
 
 /**
  * Generates detailed study notes for a specific topic.
@@ -174,7 +282,7 @@ Use the key concepts: ${topic.key_points?.join(', ')}. Format the entire output 
  * Generates the best mnemonic for a given set of key points.
  */
 export const apiGenerateBestMnemonic = async (topic: Topic, userInput: string): Promise<MnemonicOption> => {
-     const prompt = `You are a creative mnemonic expert, specializing in making study points lively and memorable. Your task is to generate a SINGLE, high-quality mnemonic for the given topic.
+    const prompt = `You are a creative mnemonic expert, specializing in making study points lively and memorable. Your task is to generate a SINGLE, high-quality mnemonic for the given topic.
 
 **RULES:**
 1.  **Mnemonic Word:** The mnemonic MUST be a single, well-known name of a city, country, capital, brand, or celebrity.
@@ -220,7 +328,7 @@ ${userInput}`;
  * Generates a follow-up mnemonic based on user feedback.
  */
 export const apiGenerateFollowUpMnemonic = async (topic: Topic, userInput: string, bestMnemonic: MnemonicOption, followUpQuery: string): Promise<MnemonicOption> => {
-     const prompt = `You are a creative mnemonic expert. You have already generated one mnemonic for the user. Now, the user has a follow-up request to generate a different one.
+    const prompt = `You are a creative mnemonic expert. You have already generated one mnemonic for the user. Now, the user has a follow-up request to generate a different one.
 
 **Original Topic:** ${topic.topic}
 **Original Key Points:**

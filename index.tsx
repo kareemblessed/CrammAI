@@ -4,6 +4,7 @@
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
+import type { LiveServerMessage } from '@google/genai';
 import {
     apiGenerateStudyPlan,
     apiGenerateStudyNotes,
@@ -11,10 +12,20 @@ import {
     apiGenerateFollowUpMnemonic,
     apiGeneratePracticeQuiz,
     apiChatWithDocuments,
+    apiConnectLiveTutor,
+    createBlob,
+    decode,
+    decodeAudioData,
 } from './api';
 import type { Mode, Topic, AnalysisResult, MnemonicOption, QuizQuestion, ChatMessage } from './api';
 
 type View = 'home' | 'upload' | 'loading' | 'results' | 'study' | 'quiz' | 'quiz-summary';
+type TranscriptMessage = {
+    role: 'user' | 'model' | 'status';
+    text: string;
+    id: number;
+}
+
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -742,10 +753,11 @@ const ChatStudio = () => {
 };
 
 
-const StudyPage = ({ topic: initialTopic, onBack, updateTopicInList }: {
+const StudyPage = ({ topic: initialTopic, onBack, updateTopicInList, onStartTutor }: {
     topic: Topic;
     onBack: () => void;
     updateTopicInList: (topic: Topic) => void;
+    onStartTutor: (topic: Topic) => void;
 }) => {
     const [topic, setTopic] = useState(initialTopic);
     const [isGeneratingNotes, setIsGeneratingNotes] = useState(!initialTopic.notes);
@@ -783,6 +795,13 @@ const StudyPage = ({ topic: initialTopic, onBack, updateTopicInList }: {
             </header>
 
             <h1 className="study-topic-title">{topic.topic}</h1>
+            
+            <div className="study-actions-bar">
+                <button className="live-tutor-button" onClick={() => onStartTutor(topic)}>
+                    🎙️ Start Live Tutor Session
+                </button>
+            </div>
+            
             <p className="study-topic-reason">{topic.reason}</p>
 
             <div className="study-content-layout">
@@ -897,14 +916,13 @@ const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
         if (accuracy === 100) return "Perfect score! You've mastered this topic.";
         if (accuracy >= 80) return "Excellent work! You have a strong grasp of the key concepts.";
         if (accuracy >= 60) return "Good effort! A little more review will make a big difference.";
-        return "You're building a foundation. Let's try that again to solidify your knowledge.";
+        return "You're building a foundation. Let's try again to solidify these concepts.";
     };
 
     return (
         <section className="quiz-summary-view view-container">
             <header className="page-header">
-                <h1>Quiz Complete!</h1>
-                <p className="subtitle">Here's your performance for the topic: {topic.topic}</p>
+                <h1>Quiz Results: {topic.topic}</h1>
             </header>
             <div className="summary-card">
                 <div className="summary-score-container">
@@ -913,13 +931,240 @@ const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
                 </div>
                 <p className="summary-message">{getSummaryMessage()}</p>
                 <div className="summary-actions">
-                    <button className="summary-button secondary" onClick={onBack}>Back to Plan</button>
-                    <button className="summary-button primary" onClick={onRetry}>
-                        Retry Quiz
+                    <button onClick={onRetry} className="summary-button primary">
+                        Try Again
+                    </button>
+                    <button onClick={onBack} className="summary-button secondary">
+                        Back to Plan
                     </button>
                 </div>
             </div>
         </section>
+    );
+};
+
+const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: () => void; }) => {
+    const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
+    const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+
+    const sessionPromiseRef = useRef<any>(null); // Using `any` because the type is complex and we just need to hold it
+    const inputAudioContextRef = useRef<AudioContext | null>(null);
+    const outputAudioContextRef = useRef<AudioContext | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const audioNodesRef = useRef<{ source?: MediaStreamAudioSourceNode; processor?: ScriptProcessorNode }>({});
+    const outputQueueRef = useRef<{ source: AudioBufferSourceNode; buffer: AudioBuffer }[]>([]);
+    const nextStartTimeRef = useRef(0);
+    
+    // Refs to accumulate transcription text for the current turn
+    const currentInputRef = useRef('');
+    const currentOutputRef = useRef('');
+
+    const transcriptEndRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [transcript]);
+
+    const addMessage = useCallback((role: 'user' | 'model' | 'status', text: string) => {
+        setTranscript(prev => [...prev, { role, text, id: Date.now() + Math.random() }]);
+    }, []);
+
+    const processTranscription = useCallback((message: LiveServerMessage) => {
+        const isTurnComplete = message.serverContent?.turnComplete;
+        const inputChunk = message.serverContent?.inputTranscription?.text;
+        const outputChunk = message.serverContent?.outputTranscription?.text;
+
+        if (inputChunk) {
+            currentInputRef.current += inputChunk;
+            setTranscript(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.role === 'user') {
+                    // Update the last user message with the full accumulated text
+                    const updatedLast = { ...last, text: currentInputRef.current };
+                    return [...prev.slice(0, -1), updatedLast];
+                } else {
+                    // It's the first chunk of a new user message
+                    return [...prev, { role: 'user', text: currentInputRef.current, id: Date.now() }];
+                }
+            });
+        }
+
+        if (outputChunk) {
+            currentOutputRef.current += outputChunk;
+            setTranscript(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.role === 'model') {
+                    // Update the last model message with the full accumulated text
+                    const updatedLast = { ...last, text: currentOutputRef.current };
+                    return [...prev.slice(0, -1), updatedLast];
+                } else {
+                    // It's the first chunk of a new model message
+                    return [...prev, { role: 'model', text: currentOutputRef.current, id: Date.now() }];
+                }
+            });
+        }
+
+        if (isTurnComplete) {
+            // Clean up empty user message if they didn't really say anything
+            if (currentInputRef.current.trim() === '') {
+                setTranscript(prev => {
+                    const last = prev[prev.length - 1];
+                    if (last?.role === 'user' && last.text.trim() === '') {
+                        return prev.slice(0, -1);
+                    }
+                    return prev;
+                });
+            }
+            // Reset refs for the next turn
+            currentInputRef.current = '';
+            currentOutputRef.current = '';
+        }
+    }, []);
+
+    const playAudio = useCallback(async (base64Audio: string) => {
+        if (!outputAudioContextRef.current) return;
+        setIsSpeaking(true);
+        const audioData = decode(base64Audio);
+        const audioBuffer = await decodeAudioData(audioData, outputAudioContextRef.current, 24000, 1);
+        const source = outputAudioContextRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(outputAudioContextRef.current.destination);
+
+        const now = outputAudioContextRef.current.currentTime;
+        const startTime = Math.max(now, nextStartTimeRef.current);
+        source.start(startTime);
+        nextStartTimeRef.current = startTime + audioBuffer.duration;
+
+        const queueItem = { source, buffer: audioBuffer };
+        outputQueueRef.current.push(queueItem);
+
+        source.onended = () => {
+            outputQueueRef.current.shift();
+            if (outputQueueRef.current.length === 0) {
+                setIsSpeaking(false);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        let isCancelled = false;
+
+        const startSession = async () => {
+            try {
+                addMessage('status', 'Requesting microphone access...');
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                if (isCancelled) {
+                    stream.getTracks().forEach(track => track.stop());
+                    return;
+                }
+                mediaStreamRef.current = stream;
+
+                // FIX: Cast window to any to allow access to webkitAudioContext for older browser compatibility.
+                inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+                outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+                
+                addMessage('status', 'Connecting to Live Tutor...');
+
+                sessionPromiseRef.current = apiConnectLiveTutor(topic, {
+                    onopen: () => {
+                        if (isCancelled) return;
+                        setStatus('connected');
+                        addMessage('status', 'Connection established. You can start speaking.');
+                        
+                        const source = inputAudioContextRef.current!.createMediaStreamSource(stream);
+                        const scriptProcessor = inputAudioContextRef.current!.createScriptProcessor(4096, 1, 1);
+                        
+                        scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                            const pcmBlob = createBlob(inputData);
+                            sessionPromiseRef.current.then((session: any) => {
+                                session.sendRealtimeInput({ media: pcmBlob });
+                            });
+                        };
+                        
+                        source.connect(scriptProcessor);
+                        scriptProcessor.connect(inputAudioContextRef.current!.destination);
+                        audioNodesRef.current = { source, processor: scriptProcessor };
+                    },
+                    onmessage: async (message: LiveServerMessage) => {
+                        processTranscription(message);
+                        const audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+                        if (audio) {
+                           await playAudio(audio);
+                        }
+                    },
+                    onerror: (e: ErrorEvent) => {
+                        console.error('Live session error:', e);
+                        setStatus('error');
+                        addMessage('status', `An error occurred: ${e.message}. Please try again.`);
+                    },
+                    onclose: () => {
+                        setStatus('disconnected');
+                    },
+                });
+                
+                await sessionPromiseRef.current;
+
+            } catch (err) {
+                console.error('Failed to start tutor session:', err);
+                setStatus('error');
+                addMessage('status', 'Could not access microphone. Please check your browser permissions and try again.');
+            }
+        };
+
+        startSession();
+
+        return () => {
+            isCancelled = true;
+            if (sessionPromiseRef.current) {
+                sessionPromiseRef.current.then((session: any) => session.close());
+            }
+            mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+            if (audioNodesRef.current.source) {
+                audioNodesRef.current.source.disconnect();
+            }
+            if (audioNodesRef.current.processor) {
+                audioNodesRef.current.processor.disconnect();
+            }
+            inputAudioContextRef.current?.close();
+            outputAudioContextRef.current?.close();
+        };
+    }, [topic, addMessage, playAudio, processTranscription]);
+
+    const getStatusText = () => {
+        switch(status) {
+            case 'connecting': return 'Connecting...';
+            case 'connected': return isSpeaking ? 'Tutor is speaking...' : 'Listening...';
+            case 'error': return 'Connection Error';
+            case 'disconnected': return 'Session Ended';
+        }
+    }
+
+    return (
+        <div className="tutor-overlay" role="dialog" aria-modal="true" aria-labelledby="tutor-title">
+            <div className="tutor-container">
+                <header className="tutor-header">
+                    <h2 id="tutor-title">Live Tutor: {topic.topic}</h2>
+                    <button onClick={onEndSession} className="tutor-close-button" aria-label="End session">&times;</button>
+                </header>
+
+                <div className="tutor-visualizer">
+                    <div className={`tutor-orb ${status === 'connected' ? 'listening' : ''} ${isSpeaking ? 'speaking' : ''}`}></div>
+                    <div className="tutor-status">{getStatusText()}</div>
+                </div>
+
+                <div className="tutor-transcript-container">
+                    <div className="tutor-transcript">
+                        {transcript.map((msg) => (
+                            <div key={msg.id} className={`transcript-message ${msg.role}`}>
+                                <div className="message-bubble">{msg.text}</div>
+                            </div>
+                        ))}
+                         <div ref={transcriptEndRef} />
+                    </div>
+                </div>
+            </div>
+        </div>
     );
 };
 
@@ -929,40 +1174,62 @@ const App = () => {
     const [mode, setMode] = useState<Mode | null>(null);
     const [files, setFiles] = useState<(File | null)[]>([null, null, null]);
     const [error, setError] = useState<string | null>(null);
-    const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-    const [activeTopic, setActiveTopic] = useState<Topic | null>(null);
-    const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-    const [quizSummary, setQuizSummary] = useState<{ score: number, total: number } | null>(null);
+    const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+    const [currentTopic, setCurrentTopic] = useState<Topic | null>(null);
+    const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[] | null>(null);
+    const [quizScore, setQuizScore] = useState<{score: number, total: number} | null>(null);
+    const [isTutorActive, setIsTutorActive] = useState(false);
+
+    const theme = getStatus(mode);
+    
+    // Apply theme to body and set dynamic CSS variables
+    useEffect(() => {
+        document.body.className = theme.themeClassName;
+        const root = document.documentElement;
+        root.style.setProperty('--dynamic-primary', theme.primaryColor);
+        root.style.setProperty('--dynamic-bg', theme.darkBgColor);
+        root.style.setProperty('--dynamic-primary-trans', `${theme.primaryColor}50`);
+    }, [theme]);
+    
+    const handleReset = () => {
+        setView('home');
+        setMode(null);
+        setFiles([null, null, null]);
+        setError(null);
+        setAnalysis(null);
+        setCurrentTopic(null);
+        setQuizQuestions(null);
+        setQuizScore(null);
+        setIsTutorActive(false);
+    };
 
     const handleSelectMode = (selectedMode: Mode) => {
         setMode(selectedMode);
         setView('upload');
     };
-
+    
     const handleBackToHome = () => {
         setMode(null);
         setView('home');
     };
-
-    const handleReset = () => {
-        setMode(null);
-        setView('home');
-        setFiles([null, null, null]);
-        setError(null);
-        setAnalysisResult(null);
-        setActiveTopic(null);
-    };
-
+    
+    const handleBackToResults = () => {
+        setView('results');
+        setCurrentTopic(null);
+        setQuizQuestions(null);
+    }
+    
     const handleAddFile = (file: File, index: number) => {
-        setError(null);
+        // Validation
         if (!ALLOWED_MIME_TYPES.includes(file.type)) {
-            setError(`File type not supported: ${file.type}. Please upload a supported format.`);
+            alert(`File type not supported: ${file.type}. Please upload one of: ${ALLOWED_MIME_TYPES.join(', ')}`);
             return;
         }
         if (file.size > MAX_FILE_SIZE) {
-            setError(`File size exceeds the 10MB limit.`);
+            alert(`File is too large: ${formatFileSize(file.size)}. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`);
             return;
         }
+
         const newFiles = [...files];
         newFiles[index] = file;
         setFiles(newFiles);
@@ -973,133 +1240,126 @@ const App = () => {
         newFiles[index] = null;
         setFiles(newFiles);
     };
-    
+
     const handleGeneratePlan = async () => {
-        const validFiles = files.filter((f): f is File => f !== null);
+        const validFiles = files.filter(f => f !== null) as File[];
         if (validFiles.length === 0 || !mode) return;
         
         setView('loading');
         setError(null);
+        
         try {
             const result = await apiGenerateStudyPlan(mode, validFiles);
-            setAnalysisResult(result);
+            setAnalysis(result);
             setView('results');
-        } catch (e) {
+        } catch(e) {
             console.error(e);
-            setError("Sorry, there was an error analyzing your documents. Please try again.");
-            // On error, go back to upload view to allow user to try again
-            setView('upload'); 
+            setError("Sorry, I couldn't generate a study plan. The AI might be busy or an error occurred. Please try again.");
+            setView('upload'); // Go back to upload page on error
         }
     };
     
     const handleStudyTopic = (topic: Topic) => {
-        setActiveTopic(topic);
+        setCurrentTopic(topic);
         setView('study');
     };
-
-    const handleStartQuiz = async (topic: Topic) => {
-        // A quiz needs the study notes, which are generated on the study page.
-        // Let's ensure notes exist before creating a quiz.
-        setView('loading');
-        try {
-            let topicWithNotes = topic;
-            if (!topic.notes) {
-                const notes = await apiGenerateStudyNotes(topic);
-                topicWithNotes = { ...topic, notes };
-                // Update the topic in the main list so we don't regenerate notes next time
-                updateTopicInList(topicWithNotes);
-            }
-            
-            const generatedQuestions = await apiGeneratePracticeQuiz(topicWithNotes);
-            setActiveTopic(topicWithNotes);
-            setQuizQuestions(generatedQuestions);
-            setView('quiz');
-        } catch (e) {
-            console.error("Error generating quiz:", e);
-            setError("Sorry, there was an error creating the quiz. Please try again.");
-            setView('results'); // Go back to results on failure
-        }
-    };
     
-    const handleFinishQuiz = (score: number, total: number) => {
-        setQuizSummary({ score, total });
-        setView('quiz-summary');
-    };
-    
-    const handleBackToResults = () => {
-        setActiveTopic(null);
-        setQuizSummary(null);
-        setView('results');
-    };
-
+    // Used by StudyPage to update the main analysis object when notes/mnemonics are generated
     const updateTopicInList = (updatedTopic: Topic) => {
-        if (!analysisResult) return;
-        const newStudyThese = analysisResult.study_these.map(t => 
+        if (!analysis) return;
+        
+        const updatedTopics = analysis.study_these.map(t => 
             t.topic === updatedTopic.topic ? updatedTopic : t
         );
-        setAnalysisResult({ ...analysisResult, study_these: newStudyThese });
+        
+        setAnalysis({ ...analysis, study_these: updatedTopics });
+    };
+    
+    const handleStartQuiz = async (topic: Topic) => {
+        setCurrentTopic(topic);
+        setView('loading');
+        
+        try {
+            const questions = await apiGeneratePracticeQuiz(topic);
+            if (questions.length === 0) {
+                 throw new Error("The AI didn't generate any questions.");
+            }
+            setQuizQuestions(questions);
+            setView('quiz');
+        } catch(e) {
+            console.error(e);
+            setError("Sorry, I couldn't create a quiz for this topic. Please try again.");
+            setView('results');
+        }
+    }
+    
+    const handleFinishQuiz = (score: number, total: number) => {
+        setQuizScore({ score, total });
+        setView('quiz-summary');
+    }
+    
+    const handleRetryQuiz = () => {
+        if (currentTopic && quizQuestions) {
+            setView('quiz');
+        } else {
+            handleBackToResults(); // Fallback if state is lost
+        }
+    }
+
+    const handleStartTutor = (topic: Topic) => {
+        setCurrentTopic(topic);
+        setIsTutorActive(true);
     };
 
-    useEffect(() => {
-        const status = getStatus(mode);
-        document.body.className = status.themeClassName;
-        
-        const root = document.documentElement;
-        root.style.setProperty('--dynamic-primary', status.primaryColor);
-        root.style.setProperty('--dynamic-primary-trans', `${status.primaryColor}40`); // For glows
-        root.style.setProperty('--dynamic-bg', status.darkBgColor);
-
-    }, [mode]);
+    const handleEndTutor = () => {
+        setIsTutorActive(false);
+    };
 
     const renderView = () => {
         switch (view) {
             case 'home':
                 return <HomePage onSelectMode={handleSelectMode} />;
             case 'upload':
-                return (
-                    <>
-                        {error && <div className="error-message">{error}</div>}
-                        <UploadPage 
-                            mode={mode!} 
-                            files={files} 
-                            onBack={handleBackToHome} 
-                            addFile={handleAddFile} 
-                            onRemoveFile={handleRemoveFile}
-                            onGeneratePlan={handleGeneratePlan}
-                        />
-                    </>
-                );
+                return <UploadPage 
+                    mode={mode!}
+                    files={files}
+                    onBack={handleBackToHome}
+                    addFile={handleAddFile}
+                    onRemoveFile={handleRemoveFile}
+                    onGeneratePlan={handleGeneratePlan}
+                />;
             case 'loading':
                 return <LoadingPage mode={mode} />;
             case 'results':
                 return <ResultsPage 
-                    analysis={analysisResult} 
-                    mode={mode!} 
+                    analysis={analysis}
+                    mode={mode!}
                     onStudyTopic={handleStudyTopic}
                     onStartQuiz={handleStartQuiz}
-                    onReset={handleReset} 
+                    onReset={handleReset}
                 />;
             case 'study':
                 return <StudyPage 
-                            topic={activeTopic!} 
-                            onBack={handleBackToResults} 
-                            updateTopicInList={updateTopicInList}
-                       />;
+                    topic={currentTopic!} 
+                    onBack={handleBackToResults}
+                    updateTopicInList={updateTopicInList}
+                    onStartTutor={handleStartTutor}
+                />;
             case 'quiz':
-                 return <QuizPage 
-                            topic={activeTopic!} 
-                            questions={quizQuestions}
-                            onBack={handleBackToResults}
-                            onFinish={handleFinishQuiz}
-                       />;
+                return <QuizPage
+                    topic={currentTopic!}
+                    questions={quizQuestions!}
+                    onBack={handleBackToResults}
+                    onFinish={handleFinishQuiz}
+                />;
             case 'quiz-summary':
                 return <QuizSummaryPage
-                            topic={activeTopic!}
-                            score={quizSummary!.score}
-                            total={quizSummary!.total}
-                            onRetry={() => handleStartQuiz(activeTopic!)}
-                            onBack={handleBackToResults}
-                       />;
+                    topic={currentTopic!}
+                    score={quizScore!.score}
+                    total={quizScore!.total}
+                    onRetry={handleRetryQuiz}
+                    onBack={handleBackToResults}
+                />;
             default:
                 return <HomePage onSelectMode={handleSelectMode} />;
         }
@@ -1113,12 +1373,20 @@ const App = () => {
                     <CrammAIEmblem />
                 </header>
                 <main>
+                    {error && <div className="error-message">{error}</div>}
                     {renderView()}
                 </main>
             </div>
+            {isTutorActive && currentTopic && (
+                <LiveTutorView topic={currentTopic} onEndSession={handleEndTutor} />
+            )}
         </>
     );
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
-root.render(<App />);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
