@@ -11,13 +11,14 @@ import {
     apiGenerateBestMnemonic,
     apiGenerateFollowUpMnemonic,
     apiGeneratePracticeQuiz,
+    apiGenerateQuizSummary,
     apiChatWithDocuments,
     apiConnectLiveTutor,
     createBlob,
     decode,
     decodeAudioData,
 } from './api';
-import type { Mode, Topic, AnalysisResult, MnemonicOption, QuizQuestion, ChatMessage } from './api';
+import type { Mode, Topic, AnalysisResult, MnemonicOption, QuizQuestion, QuizSummary, ChatMessage } from './api';
 
 type View = 'home' | 'upload' | 'loading' | 'results' | 'study' | 'quiz' | 'quiz-summary';
 type TranscriptMessage = {
@@ -826,33 +827,35 @@ const StudyPage = ({ topic: initialTopic, onBack, updateTopicInList, onStartTuto
 };
 
 
-const QuizPage = ({ topic, questions, onBack, onFinish }: {
+const QuizPage = ({ topic, questions, onBack, onFinish, isAdapting, currentIndex, onSetAnswer, onNextQuestion }: {
     topic: Topic;
     questions: QuizQuestion[];
     onBack: () => void;
-    onFinish: (score: number, total: number) => void;
+    onFinish: () => void;
+    isAdapting: boolean;
+    currentIndex: number;
+    onSetAnswer: (answer: string) => void;
+    onNextQuestion: () => void;
 }) => {
-    const [currentIndex, setCurrentIndex] = useState(0);
     const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-    const [score, setScore] = useState(0);
-    
     const currentQuestion = questions[currentIndex];
 
     const handleAnswerSelect = (option: string) => {
         if (selectedAnswer) return; // Prevent changing answer after selection
-
         setSelectedAnswer(option);
-        if (option === currentQuestion.correct_answer) {
-            setScore(s => s + 1);
-        }
+        onSetAnswer(option);
     };
+    
+    // Reset selected answer when question changes
+    useEffect(() => {
+        setSelectedAnswer(null);
+    }, [currentIndex]);
 
     const handleNext = () => {
-        if (currentIndex < questions.length - 1) {
-            setCurrentIndex(prev => prev + 1);
-            setSelectedAnswer(null);
+        if (currentIndex < 7) {
+            onNextQuestion();
         } else {
-            onFinish(score, questions.length);
+            onFinish();
         }
     };
 
@@ -862,63 +865,69 @@ const QuizPage = ({ topic, questions, onBack, onFinish }: {
         if (option === selectedAnswer) return 'incorrect';
         return 'disabled';
     };
+    
+    const totalQuestions = 8;
+    const progressPercent = ((currentIndex + (selectedAnswer ? 1 : 0)) / totalQuestions) * 100;
 
     return (
         <section className="quiz-view view-container">
             <header className="quiz-header">
                 <button onClick={onBack} className="back-button" aria-label="Go back to study plan">&larr; Back to Plan</button>
-                <div className="quiz-progress">Question {currentIndex + 1}/{questions.length}</div>
-                 <div className="quiz-score">Score: {score}</div>
+                <div className="quiz-progress">Question {currentIndex + 1}/{totalQuestions}</div>
             </header>
+             <div className="quiz-progress-bar-container">
+                <div className="quiz-progress-bar-fill" style={{ width: `${progressPercent}%` }}></div>
+            </div>
             <h1 className="study-topic-title">Practice Quiz: {topic.topic}</h1>
             
-            <div className="quiz-card">
-                <h2 className="quiz-question">{currentQuestion.question}</h2>
-                <div className="quiz-options">
-                    {currentQuestion.options.map((option, index) => (
-                        <button
-                            key={index}
-                            className={`quiz-option ${getOptionClass(option)}`}
-                            onClick={() => handleAnswerSelect(option)}
-                            disabled={!!selectedAnswer}
-                        >
-                            {option}
-                        </button>
-                    ))}
+            {isAdapting ? (
+                <div className="quiz-adapting-loader">
+                    <div className="loading-spinner small"></div>
+                    <span>Adapting quiz to your performance...</span>
                 </div>
-
-                {selectedAnswer && (
-                    <div className="quiz-explanation">
-                        <p><strong>Explanation:</strong> {currentQuestion.explanation}</p>
+            ) : (
+                <div className="quiz-card">
+                    <h2 className="quiz-question">{currentQuestion.question}</h2>
+                    <div className="quiz-options">
+                        {currentQuestion.options.map((option, index) => (
+                            <button
+                                key={index}
+                                className={`quiz-option ${getOptionClass(option)}`}
+                                onClick={() => handleAnswerSelect(option)}
+                                disabled={!!selectedAnswer}
+                            >
+                                {option}
+                            </button>
+                        ))}
                     </div>
-                )}
-            </div>
+
+                    {selectedAnswer && (
+                        <div className="quiz-explanation">
+                            <p><strong>Explanation:</strong> {currentQuestion.explanation}</p>
+                        </div>
+                    )}
+                </div>
+            )}
             
-            {selectedAnswer && (
+            {selectedAnswer && !isAdapting && (
                 <button onClick={handleNext} className="quiz-next-button">
-                    {currentIndex < questions.length - 1 ? 'Next Question' : 'Finish Quiz'} &rarr;
+                    {currentIndex < totalQuestions - 1 ? 'Next Question' : 'Finish Quiz'} &rarr;
                 </button>
             )}
         </section>
     );
 };
 
-const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
+const QuizSummaryPage = ({ topic, score, total, onRetry, onBack, summary }: {
     topic: Topic;
     score: number;
     total: number;
     onRetry: () => void;
     onBack: () => void;
+    summary: QuizSummary | null;
 }) => {
     const accuracy = total > 0 ? Math.round((score / total) * 100) : 0;
     
-    const getSummaryMessage = () => {
-        if (accuracy === 100) return "Perfect score! You've mastered this topic.";
-        if (accuracy >= 80) return "Excellent work! You have a strong grasp of the key concepts.";
-        if (accuracy >= 60) return "Good effort! A little more review will make a big difference.";
-        return "You're building a foundation. Let's try again to solidify these concepts.";
-    };
-
     return (
         <section className="quiz-summary-view view-container">
             <header className="page-header">
@@ -929,7 +938,27 @@ const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
                     <div className="summary-score">{score}/{total}</div>
                     <div className="summary-accuracy">{accuracy}% Accuracy</div>
                 </div>
-                <p className="summary-message">{getSummaryMessage()}</p>
+                
+                {summary ? (
+                    <div className="ai-feedback-card">
+                        <h2 className="ai-feedback-title">{summary.headline}</h2>
+                        <MarkdownRenderer text={summary.summary_text} className="ai-feedback-text" />
+                        {summary.concepts_to_review && summary.concepts_to_review.length > 0 && (
+                            <div className="concepts-to-review">
+                                <h3>Concepts to Review:</h3>
+                                <ul>
+                                    {summary.concepts_to_review.map((concept, i) => <li key={i}>{concept}</li>)}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                     <div className="notes-loader">
+                        <div className="loading-spinner small"></div>
+                        <span>Generating your personalized feedback...</span>
+                    </div>
+                )}
+                
                 <div className="summary-actions">
                     <button onClick={onRetry} className="summary-button primary">
                         Try Again
@@ -1176,8 +1205,12 @@ const App = () => {
     const [error, setError] = useState<string | null>(null);
     const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
     const [currentTopic, setCurrentTopic] = useState<Topic | null>(null);
-    const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[] | null>(null);
-    const [quizScore, setQuizScore] = useState<{score: number, total: number} | null>(null);
+    const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+    const [userAnswers, setUserAnswers] = useState<(string|null)[]>([]);
+    const [quizCurrentIndex, setQuizCurrentIndex] = useState(0);
+    const [isAdaptingQuiz, setIsAdaptingQuiz] = useState(false);
+    const [finalQuizScore, setFinalQuizScore] = useState<{score: number, total: number} | null>(null);
+    const [quizSummary, setQuizSummary] = useState<QuizSummary | null>(null);
     const [isTutorActive, setIsTutorActive] = useState(false);
 
     const theme = getStatus(mode);
@@ -1198,8 +1231,11 @@ const App = () => {
         setError(null);
         setAnalysis(null);
         setCurrentTopic(null);
-        setQuizQuestions(null);
-        setQuizScore(null);
+        setQuizQuestions([]);
+        setFinalQuizScore(null);
+        setQuizSummary(null);
+        setUserAnswers([]);
+        setQuizCurrentIndex(0);
         setIsTutorActive(false);
     };
 
@@ -1216,7 +1252,11 @@ const App = () => {
     const handleBackToResults = () => {
         setView('results');
         setCurrentTopic(null);
-        setQuizQuestions(null);
+        setQuizQuestions([]);
+        setFinalQuizScore(null);
+        setQuizSummary(null);
+        setUserAnswers([]);
+        setQuizCurrentIndex(0);
     }
     
     const handleAddFile = (file: File, index: number) => {
@@ -1277,10 +1317,15 @@ const App = () => {
     
     const handleStartQuiz = async (topic: Topic) => {
         setCurrentTopic(topic);
+        setQuizQuestions([]);
+        setUserAnswers(Array(8).fill(null));
+        setQuizCurrentIndex(0);
+        setFinalQuizScore(null);
+        setQuizSummary(null);
         setView('loading');
         
         try {
-            const questions = await apiGeneratePracticeQuiz(topic);
+            const questions = await apiGeneratePracticeQuiz(topic, 'medium', 4);
             if (questions.length === 0) {
                  throw new Error("The AI didn't generate any questions.");
             }
@@ -1293,14 +1338,70 @@ const App = () => {
         }
     }
     
-    const handleFinishQuiz = (score: number, total: number) => {
-        setQuizScore({ score, total });
+    const handleAdaptQuiz = async () => {
+        if (!currentTopic || quizQuestions.length !== 4) return;
+        
+        setIsAdaptingQuiz(true);
+        try {
+            const firstFourAnswers = userAnswers.slice(0, 4);
+            const score = firstFourAnswers.reduce((acc, answer, i) => {
+                return answer === quizQuestions[i].correct_answer ? acc + 1 : acc;
+            }, 0);
+
+            const difficulty = score >= 3 ? 'hard' : 'easy';
+            const nextQuestions = await apiGeneratePracticeQuiz(currentTopic, difficulty, 4, quizQuestions);
+            setQuizQuestions(prev => [...prev, ...nextQuestions]);
+        } catch(e) {
+            console.error("Failed to adapt quiz:", e);
+            // If adaptation fails, just go to summary with the first 4 questions
+            handleFinishQuiz();
+        } finally {
+            setIsAdaptingQuiz(false);
+        }
+    };
+    
+    const handleSetUserAnswer = (answer: string) => {
+        const newAnswers = [...userAnswers];
+        newAnswers[quizCurrentIndex] = answer;
+        setUserAnswers(newAnswers);
+    }
+    
+    const handleNextQuestion = () => {
+        if (quizCurrentIndex === 3) {
+            handleAdaptQuiz();
+        }
+        setQuizCurrentIndex(prev => prev + 1);
+    }
+
+    const handleFinishQuiz = async () => {
+        const finalQuestions = quizQuestions.slice(0, userAnswers.filter(a => a !== null).length);
+
+        const score = userAnswers.reduce((acc, answer, i) => {
+            if (i < finalQuestions.length && answer === finalQuestions[i].correct_answer) {
+                return acc + 1;
+            }
+            return acc;
+        }, 0);
+        
+        setFinalQuizScore({ score, total: finalQuestions.length });
         setView('quiz-summary');
+        
+        try {
+            const summary = await apiGenerateQuizSummary(currentTopic!, finalQuestions, userAnswers);
+            setQuizSummary(summary);
+        } catch(e) {
+            console.error("Error generating quiz summary:", e);
+            setQuizSummary({
+                headline: "Summary Error",
+                summary_text: "Couldn't generate personalized feedback. Review your answers and try again!",
+                concepts_to_review: []
+            });
+        }
     }
     
     const handleRetryQuiz = () => {
-        if (currentTopic && quizQuestions) {
-            setView('quiz');
+        if (currentTopic) {
+            handleStartQuiz(currentTopic);
         } else {
             handleBackToResults(); // Fallback if state is lost
         }
@@ -1351,14 +1452,19 @@ const App = () => {
                     questions={quizQuestions!}
                     onBack={handleBackToResults}
                     onFinish={handleFinishQuiz}
+                    isAdapting={isAdaptingQuiz}
+                    currentIndex={quizCurrentIndex}
+                    onSetAnswer={handleSetUserAnswer}
+                    onNextQuestion={handleNextQuestion}
                 />;
             case 'quiz-summary':
                 return <QuizSummaryPage
                     topic={currentTopic!}
-                    score={quizScore!.score}
-                    total={quizScore!.total}
+                    score={finalQuizScore!.score}
+                    total={finalQuizScore!.total}
                     onRetry={handleRetryQuiz}
                     onBack={handleBackToResults}
+                    summary={quizSummary}
                 />;
             default:
                 return <HomePage onSelectMode={handleSelectMode} />;

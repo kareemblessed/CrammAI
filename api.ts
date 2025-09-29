@@ -2,7 +2,8 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Part, Type, Chat, LiveSession, LiveServerMessage, Modality, Blob } from "@google/genai";
+// FIX: Remove 'LiveSession' as it is not an exported member of '@google/genai'.
+import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -30,6 +31,13 @@ export interface QuizQuestion {
     options: string[];
     correct_answer: string;
     explanation: string;
+    difficulty: 'easy' | 'medium' | 'hard';
+}
+
+export interface QuizSummary {
+    headline: string;
+    summary_text: string;
+    concepts_to_review: string[];
 }
 
 export interface ChatMessage {
@@ -223,11 +231,12 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
 /**
  * Connects to the Live API for a real-time AI Tutor session.
  */
-export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<LiveSession> => {
-    const systemInstruction = `You are an enthusiastic and patient AI study tutor named Cramm. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
+// FIX: Update return type to Promise<any> as 'LiveSession' is not a public type.
+export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<any> => {
+    const systemInstruction = `You are an enthusiastic and patient AI study tutor named CrammAi. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
 
 **Your Persona:**
-- **Encouraging:** Start with a warm welcome like, "Hey there! I'm Cramm, your personal tutor for ${topic.topic}. I'm excited to help you crush this! What's on your mind?"
+- **Encouraging:** Start with a warm welcome like, "Hey there! I'm CrammAi, your personal tutor for ${topic.topic}. I'm excited to help you crush this! What's on your mind?"
 - **Interactive:** Ask questions to check for understanding (e.g., "Does that make sense?", "Can you explain that back to me in your own words?").
 - **Focused:** Stick to the provided study notes for this topic. If a question is outside the notes, gently guide them back by saying something like, "That's a great question! For now, let's focus on what's in your study materials to make sure we've got that covered for your exam."
 - **Socratic:** Instead of just giving answers, try to guide the student to the answer themselves.
@@ -378,14 +387,23 @@ Mnemonic: [THE WORD] – [A short, lively explanation of why this word fits the 
 /**
  * Generates a practice quiz for a specific topic based on its study notes.
  */
-export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestion[]> => {
-    const prompt = `You are a quiz generator. Based on the topic "${topic.topic}" and the provided study notes, generate a 3-5 question multiple-choice quiz.
+export const apiGeneratePracticeQuiz = async (
+    topic: Topic,
+    difficulty: 'easy' | 'medium' | 'hard',
+    count: number,
+    excludeQuestions: QuizQuestion[] = []
+): Promise<QuizQuestion[]> => {
+    const excludedQuestionText = excludeQuestions.map(q => q.question).join('; ');
+
+    const prompt = `You are a quiz generator. Based on the topic "${topic.topic}" and the provided study notes, generate ${count} ${difficulty}-difficulty multiple-choice questions.
 
 **RULES:**
-1. Each question must be clear and test a key concept from the notes.
-2. Provide 4 distinct options for each question.
-3. One option must be the correct answer.
-4. Include a brief, one-sentence explanation for why the correct answer is right.
+1.  Each question must be clear and test a key concept from the notes.
+2.  The difficulty of the questions must be '${difficulty}'.
+3.  Provide 4 distinct options for each question.
+4.  One option must be the correct answer.
+5.  Include a brief, one-sentence explanation for why the correct answer is right.
+6.  Do not repeat any of these questions: ${excludedQuestionText}
 
 **Study Notes:**
 ${topic.notes}`;
@@ -395,15 +413,17 @@ ${topic.notes}`;
         properties: {
             questions: {
                 type: Type.ARRAY,
-                description: "A list of 3-5 multiple choice questions.",
+                description: `A list of ${count} multiple choice questions.`,
                 items: {
                     type: Type.OBJECT,
                     properties: {
                         question: { type: Type.STRING },
                         options: { type: Type.ARRAY, items: { type: Type.STRING } },
                         correct_answer: { type: Type.STRING },
-                        explanation: { type: Type.STRING, description: "A short explanation for the correct answer." }
-                    }
+                        explanation: { type: Type.STRING, description: "A short explanation for the correct answer." },
+                        difficulty: { type: Type.STRING, description: `The difficulty, which must be '${difficulty}'.` }
+                    },
+                    required: ["question", "options", "correct_answer", "explanation", "difficulty"]
                 }
             }
         }
@@ -425,6 +445,55 @@ ${topic.notes}`;
         throw new Error("No quiz questions were generated.");
     }
 };
+
+/**
+ * Generates a personalized summary and feedback based on quiz performance.
+ */
+export const apiGenerateQuizSummary = async (
+    topic: Topic,
+    questions: QuizQuestion[],
+    userAnswers: (string | null)[]
+): Promise<QuizSummary> => {
+    const resultsString = questions.map((q, i) => {
+        const userAnswer = userAnswers[i];
+        const isCorrect = userAnswer === q.correct_answer;
+        return `Question ${i + 1} (${q.difficulty}): ${isCorrect ? 'Correct' : 'Incorrect'}. User answered "${userAnswer}", the correct answer was "${q.correct_answer}". The question was: "${q.question}"`;
+    }).join('\n');
+
+    const prompt = `You are an expert tutor providing feedback on a practice quiz for the topic: "${topic.topic}".
+
+Here are the quiz results:
+${resultsString}
+
+Analyze the student's performance, paying close attention to the incorrect answers and their difficulty. Your goal is to provide encouraging but actionable feedback.
+
+Generate a JSON response with the following structure:
+- headline: A short, encouraging title for the summary (e.g., "Great Effort!" or "Solid Foundation!").
+- summary_text: A paragraph explaining what they did well and identifying the primary area(s) for improvement based on the missed questions. Be specific. For example: "You have a good grasp of the basic concepts, but seem to struggle with questions related to [specific concept from missed question]. Let's focus on that."
+- concepts_to_review: A list of 2-3 specific concepts or terms from the missed questions that the student should review in their notes.`;
+
+    const summarySchema = {
+        type: Type.OBJECT,
+        properties: {
+            headline: { type: Type.STRING },
+            summary_text: { type: Type.STRING },
+            concepts_to_review: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ["headline", "summary_text", "concepts_to_review"]
+    };
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: summarySchema,
+        },
+    });
+
+    return JSON.parse(response.text);
+};
+
 
 /**
  * Sends a user's message to the ongoing chat session and gets a response.
