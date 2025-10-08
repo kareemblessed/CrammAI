@@ -2,16 +2,16 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-// FIX: Remove 'LiveSession' as it is not an exported member of '@google/genai'.
-import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob } from "@google/genai";
+import { GoogleGenAI, Part, Type, Chat, LiveSession, LiveServerMessage, Modality, Blob } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
 
-export interface MnemonicOption {
+export interface MnemonicResult {
+    title: string;
     mnemonic_word: string;
-    explanation: string;
-    mappings: string[];
+    description: string;
+    breakdown: string[];
 }
 
 export interface Topic {
@@ -19,7 +19,7 @@ export interface Topic {
     reason: string;
     key_points?: string[];
     notes?: string;
-    best_mnemonic?: MnemonicOption;
+    mnemonic?: MnemonicResult;
 }
 
 export interface AnalysisResult {
@@ -31,13 +31,6 @@ export interface QuizQuestion {
     options: string[];
     correct_answer: string;
     explanation: string;
-    difficulty: 'easy' | 'medium' | 'hard';
-}
-
-export interface QuizSummary {
-    headline: string;
-    summary_text: string;
-    concepts_to_review: string[];
 }
 
 export interface ChatMessage {
@@ -184,7 +177,8 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
                             description: "A list of 3-5 specific, actionable key concepts or terms within this topic that the student must know.",
                             items: { type: Type.STRING }
                         }
-                    }
+                    },
+                    required: ["topic", "reason"]
                 }
             }
         }
@@ -200,7 +194,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
         },
     });
 
-    const resultText = response.text;
+    const resultText = response.text?.trim();
     if (!resultText) throw new Error("Received an empty response from the AI.");
 
     const result = JSON.parse(resultText);
@@ -231,12 +225,11 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
 /**
  * Connects to the Live API for a real-time AI Tutor session.
  */
-// FIX: Update return type to Promise<any> as 'LiveSession' is not a public type.
-export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<any> => {
-    const systemInstruction = `You are an enthusiastic and patient AI study tutor named CrammAi. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
+export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<LiveSession> => {
+    const systemInstruction = `You are an enthusiastic and patient AI study tutor named CrammAI. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
 
 **Your Persona:**
-- **Encouraging:** Start with a warm welcome like, "Hey there! I'm CrammAi, your personal tutor for ${topic.topic}. I'm excited to help you crush this! What's on your mind?"
+- **Encouraging:** Start with a warm welcome like, "Hey there! I'm CrammAI, your personal tutor for ${topic.topic}. I'm excited to help you crush this! What's on your mind?"
 - **Interactive:** Ask questions to check for understanding (e.g., "Does that make sense?", "Can you explain that back to me in your own words?").
 - **Focused:** Stick to the provided study notes for this topic. If a question is outside the notes, gently guide them back by saying something like, "That's a great question! For now, let's focus on what's in your study materials to make sure we've got that covered for your exam."
 - **Socratic:** Instead of just giving answers, try to guide the student to the answer themselves.
@@ -268,164 +261,119 @@ ${topic.notes}
  * Generates detailed study notes for a specific topic.
  */
 export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
-    const prompt = `Create study notes that are easy to cram and remember. For the topic "${topic.topic}", follow these rules strictly:
+    const prompt = `You are an expert educator and a master of clarity, tasked with creating a perfectly written study guide for the topic: "${topic.topic}". The student needs to understand this material deeply, not just memorize it.
 
-1.  Begin with a '### 🔎 Quick Summary' of the topic in 3–5 simple sentences.
-2.  Break down the main points into numbered sections. Each section must have:
-    - A short, clear heading as a markdown H4 heading (e.g., '#### 1. Productivity Boost 🚀').
-    - A 1–2 sentence explanation (straight to the point, no fluff).
-    - A line starting with '**Example:**' followed by a real-world example.
-    - A line starting with '**Remember:** 🧠' with a metaphor, image, or phrase to lock it in memory.
+Focus on these key concepts: ${topic.key_points?.join(', ')}.
 
-Use the key concepts: ${topic.key_points?.join(', ')}. Format the entire output using markdown without any other text.`;
-    
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-    });
-    
-    return response.text;
-};
+Your entire output must be well-structured, impeccably written, and follow this exact markdown format:
 
-/**
- * Generates the best mnemonic for a given set of key points.
- */
-export const apiGenerateBestMnemonic = async (topic: Topic, userInput: string): Promise<MnemonicOption> => {
-    const prompt = `You are a creative mnemonic expert, specializing in making study points lively and memorable. Your task is to generate a SINGLE, high-quality mnemonic for the given topic.
-
-**RULES:**
-1.  **Mnemonic Word:** The mnemonic MUST be a single, well-known name of a city, country, capital, brand, or celebrity.
-2.  **Thematic Fit:** The chosen name MUST fit the theme of the topic. You must explain this connection. For example, for "Advantages of AI," you might choose "PARIS" because it's a city known for innovation, elegance, and structure.
-3.  **Perfect Mapping:** Each letter of the mnemonic word must map to one key point. You must adapt the user's provided points (condensing, splitting, or rephrasing) to perfectly match the length of your chosen mnemonic word.
-4.  **Strict Format:** You MUST follow this format exactly. Do not add any introductory text, closing remarks, or deviations.
-
-**FORMAT:**
-Mnemonic: [THE WORD] – [A short, lively explanation of why this word fits the topic.]
-[First Letter] = [First key point]
-[Second Letter] = [Second key point]
-...and so on.
+### 🔎 Topic at a Glance
+A concise, 1-2 sentence executive summary of the entire topic.
 
 ---
 
-Now, generate a mnemonic for the following topic and key points:
+(Create 3 to 4 sections below, one for each key concept)
 
-**Topic:** ${topic.topic}
-**Key Points:**
-${userInput}`;
+#### Deep Dive: [Name of Key Concept 1] 💡
+*   **The Core Idea:** Explain this concept thoroughly in a detailed paragraph of approximately 30 words. It must be rich with information but easy to understand, providing a solid foundation.
+*   **Key Facts & Formulas:** A bulleted list of exactly 5 critical facts. Each point must be a complete, well-written sentence of approximately 17-20 words, providing substantial detail and making perfect sense on its own.
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-    });
+---
+
+#### Deep Dive: [Name of Key Concept 2] 🔬
+(Follow the same structure: A ~30-word Core Idea and 5 detailed Key Facts in ~17-20 word sentences)
+
+---
+
+(continue for all key concepts)
+
+Do not include any text before the first heading. The tone must be authoritative, clear, and highly educational. The goal is depth and understanding, not just brevity. Ensure every sentence is meaningful and contributes to a perfect study guide.`;
     
-    const text = response.text.trim();
-    const mnemonicLineMatch = text.match(/^Mnemonic:\s*([^\s–-]+)\s*[–-]\s*(.*)/im);
-    const mnemonic_word = mnemonicLineMatch ? mnemonicLineMatch[1].trim().toUpperCase() : null;
-    const explanation = mnemonicLineMatch ? mnemonicLineMatch[2].trim() : null;
-    const mappingLines = text.match(/^[A-Z]\s*=\s*.*/gm);
-    const mappings = mappingLines ? mappingLines.map(line => line.trim()) : [];
-
-    if (!mnemonic_word || !explanation || mappings.length === 0) {
-        console.error("Failed to parse mnemonic response:", text);
-        throw new Error("AI failed to generate a mnemonic in the expected format.");
-    }
-    
-    return { mnemonic_word, explanation, mappings };
-};
-
-/**
- * Generates a follow-up mnemonic based on user feedback.
- */
-export const apiGenerateFollowUpMnemonic = async (topic: Topic, userInput: string, bestMnemonic: MnemonicOption, followUpQuery: string): Promise<MnemonicOption> => {
-    const prompt = `You are a creative mnemonic expert. You have already generated one mnemonic for the user. Now, the user has a follow-up request to generate a different one.
-
-**Original Topic:** ${topic.topic}
-**Original Key Points:**
-${userInput || topic.key_points?.join('\n')}
-
-**Previously Generated Mnemonic:**
-Mnemonic: ${bestMnemonic.mnemonic_word} – ${bestMnemonic.explanation}
-${bestMnemonic.mappings.join('\n')}
-
-**User's New Request:** ${followUpQuery}
-
-**Your Task:**
-Generate a SINGLE, NEW mnemonic based on the user's request.
-
-**RULES (must follow):**
-1.  **Mnemonic Word:** Must be a single, well-known name (city, brand, celebrity, etc.).
-2.  **Thematic Fit:** The chosen name MUST fit the theme of the topic. Explain why.
-3.  **Perfect Mapping:** Each letter must map to a key point. Adapt the original points as needed.
-4.  **Strict Format:** You MUST follow the format below exactly. Do not add any text outside this format.
-
-**FORMAT:**
-Mnemonic: [THE WORD] – [A short, lively explanation of why this word fits the topic.]
-[First Letter] = [First key point]
-[Second Letter] = [Second key point]
-...and so on.`;
-
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
+       model: 'gemini-2.5-flash',
+       contents: prompt,
     });
 
-    const text = response.text.trim();
-    const mnemonicLineMatch = text.match(/^Mnemonic:\s*([^\s–-]+)\s*[–-]\s*(.*)/im);
-    const mnemonic_word = mnemonicLineMatch ? mnemonicLineMatch[1].trim().toUpperCase() : null;
-    const explanation = mnemonicLineMatch ? mnemonicLineMatch[2].trim() : null;
-    const mappingLines = text.match(/^[A-Z]\s*=\s*.*/gm);
-    const mappings = mappingLines ? mappingLines.map(line => line.trim()) : [];
-
-    if (!mnemonic_word || !explanation || mappings.length === 0) {
-        throw new Error("AI failed to generate a mnemonic in the expected format.");
-    }
-
-    return { mnemonic_word, explanation, mappings };
+    return response.text;
 };
 
 
 /**
- * Generates a practice quiz for a specific topic based on its study notes.
+ * Generates a memorable mnemonic for a given topic.
  */
-export const apiGeneratePracticeQuiz = async (
-    topic: Topic,
-    difficulty: 'easy' | 'medium' | 'hard',
-    count: number,
-    excludeQuestions: QuizQuestion[] = []
-): Promise<QuizQuestion[]> => {
-    const excludedQuestionText = excludeQuestions.map(q => q.question).join('; ');
-
-    const prompt = `You are a quiz generator. Based on the topic "${topic.topic}" and the provided study notes, generate ${count} ${difficulty}-difficulty multiple-choice questions.
-
-**RULES:**
-1.  Each question must be clear and test a key concept from the notes.
-2.  The difficulty of the questions must be '${difficulty}'.
-3.  Provide 4 distinct options for each question.
-4.  One option must be the correct answer.
-5.  Include a brief, one-sentence explanation for why the correct answer is right.
-6.  Do not repeat any of these questions: ${excludedQuestionText}
-
-**Study Notes:**
-${topic.notes}`;
-
-    const quizSchema = {
+export const apiGenerateMnemonic = async (topic: string, previous_word?: string): Promise<{ mnemonic_result: MnemonicResult }> => {
+    const responseSchema = {
         type: Type.OBJECT,
         properties: {
-            questions: {
-                type: Type.ARRAY,
-                description: `A list of ${count} multiple choice questions.`,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        question: { type: Type.STRING },
-                        options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        correct_answer: { type: Type.STRING },
-                        explanation: { type: Type.STRING, description: "A short explanation for the correct answer." },
-                        difficulty: { type: Type.STRING, description: `The difficulty, which must be '${difficulty}'.` }
-                    },
-                    required: ["question", "options", "correct_answer", "explanation", "difficulty"]
-                }
+            mnemonic_result: {
+                type: Type.OBJECT,
+                properties: {
+                    mnemonic_word: { type: Type.STRING, description: "A single, catchy, and memorable word (can be a real word or a creative, made-up one) that encapsulates the topic." },
+                    description: { type: Type.STRING, description: "A short, one-sentence explanation of how the mnemonic word relates to the topic." },
+                    breakdown: {
+                        type: Type.ARRAY,
+                        description: "An array of strings, where each string maps a letter from the mnemonic_word to a key concept from the topic. Format: 'L = Long-term memory'.",
+                        items: {
+                            type: Type.STRING
+                        }
+                    }
+                },
+                required: ["mnemonic_word", "description", "breakdown"]
             }
+        }
+    };
+    
+    const previousWordPrompt = previous_word ? `Please generate a different mnemonic word than "${previous_word}".` : '';
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `Create a mnemonic for the topic: "${topic}". The mnemonic should be a single word, with each letter representing a key part of the topic. ${previousWordPrompt}`,
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: responseSchema,
+        },
+    });
+    
+    let resultText = response.text;
+    if (!resultText) throw new Error("Received an empty response from the AI for mnemonic generation.");
+    
+    // Clean the response text to remove potential markdown code blocks
+    resultText = resultText.trim().replace(/^```json\s*/, '').replace(/```$/, '');
+    
+    const parsedJson = JSON.parse(resultText);
+
+    // The model might return the object directly, or wrapped in `mnemonic_result`.
+    // To handle this inconsistency, we check for the wrapper and add it if it's missing.
+    if (parsedJson.mnemonic_result) {
+        return parsedJson as { mnemonic_result: MnemonicResult };
+    } else {
+        // The object was not wrapped, so we wrap it ourselves to match the expected structure.
+        return { mnemonic_result: parsedJson as MnemonicResult };
+    }
+};
+
+/**
+ * Generates a short, multiple-choice practice quiz for a topic.
+ */
+export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestion[]> => {
+    const prompt = `Create a 5-question multiple-choice quiz on the topic "${topic.topic}". The questions should be based on the following key points: ${topic.key_points?.join(', ')}. For each question, provide 4 options, one correct answer, and a brief explanation for the correct answer. The difficulty should be appropriate for a university-level exam.`;
+    
+    const responseSchema = {
+        type: Type.ARRAY,
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                question: { type: Type.STRING },
+                options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    minItems: 4,
+                    maxItems: 4,
+                },
+                correct_answer: { type: Type.STRING },
+                explanation: { type: Type.STRING, description: "A clear and concise explanation of why the correct answer is right." }
+            },
+            required: ["question", "options", "correct_answer", "explanation"]
         }
     };
 
@@ -434,74 +382,25 @@ ${topic.notes}`;
         contents: prompt,
         config: {
             responseMimeType: 'application/json',
-            responseSchema: quizSchema,
+            responseSchema: responseSchema,
         },
     });
 
-    const result = JSON.parse(response.text);
-    if (result.questions && result.questions.length > 0) {
-        return result.questions;
-    } else {
-        throw new Error("No quiz questions were generated.");
-    }
-};
+    const resultText = response.text;
+    if (!resultText) throw new Error("Received an empty response from the AI for quiz generation.");
 
-/**
- * Generates a personalized summary and feedback based on quiz performance.
- */
-export const apiGenerateQuizSummary = async (
-    topic: Topic,
-    questions: QuizQuestion[],
-    userAnswers: (string | null)[]
-): Promise<QuizSummary> => {
-    const resultsString = questions.map((q, i) => {
-        const userAnswer = userAnswers[i];
-        const isCorrect = userAnswer === q.correct_answer;
-        return `Question ${i + 1} (${q.difficulty}): ${isCorrect ? 'Correct' : 'Incorrect'}. User answered "${userAnswer}", the correct answer was "${q.correct_answer}". The question was: "${q.question}"`;
-    }).join('\n');
-
-    const prompt = `You are an expert tutor providing feedback on a practice quiz for the topic: "${topic.topic}".
-
-Here are the quiz results:
-${resultsString}
-
-Analyze the student's performance, paying close attention to the incorrect answers and their difficulty. Your goal is to provide encouraging but actionable feedback.
-
-Generate a JSON response with the following structure:
-- headline: A short, encouraging title for the summary (e.g., "Great Effort!" or "Solid Foundation!").
-- summary_text: A paragraph explaining what they did well and identifying the primary area(s) for improvement based on the missed questions. Be specific. For example: "You have a good grasp of the basic concepts, but seem to struggle with questions related to [specific concept from missed question]. Let's focus on that."
-- concepts_to_review: A list of 2-3 specific concepts or terms from the missed questions that the student should review in their notes.`;
-
-    const summarySchema = {
-        type: Type.OBJECT,
-        properties: {
-            headline: { type: Type.STRING },
-            summary_text: { type: Type.STRING },
-            concepts_to_review: { type: Type.ARRAY, items: { type: Type.STRING } },
-        },
-        required: ["headline", "summary_text", "concepts_to_review"]
-    };
-
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-            responseMimeType: 'application/json',
-            responseSchema: summarySchema,
-        },
-    });
-
-    return JSON.parse(response.text);
-};
+    return JSON.parse(resultText);
+}
 
 
 /**
- * Sends a user's message to the ongoing chat session and gets a response.
+ * Handles follow-up questions using the initialized chat session.
  */
 export const apiChatWithDocuments = async (message: string): Promise<string> => {
     if (!chat) {
-        throw new Error("Chat session not initialized. Please generate a study plan first.");
+        throw new Error("Chat not initialized. Please generate a study plan first.");
     }
+    
     const response = await chat.sendMessage({ message });
     return response.text;
 };
