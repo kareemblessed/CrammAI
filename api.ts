@@ -392,6 +392,31 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
     return JSON.parse(resultText);
 }
 
+/**
+ * Generates a personalized reflection after a quiz.
+ */
+export const apiGenerateQuizReflection = async (topic: Topic, score: number, total: number, incorrectQuestions: QuizQuestion[]): Promise<string> => {
+    let prompt: string;
+    if (incorrectQuestions.length === 0) {
+        prompt = `A student just scored a perfect ${total}/${total} on a practice quiz for the topic "${topic.topic}". Write a positive and mindful assessment reflection of about 45 words. Congratulate them on their mastery of the concepts and encourage them to continue their excellent work.`;
+    } else {
+        const incorrectConcepts = incorrectQuestions.map(q => `"${q.question}"`).join(', ');
+        prompt = `A student just scored ${score}/${total} on a practice quiz for the topic "${topic.topic}". They struggled with questions about: ${incorrectConcepts}. 
+        
+Write a positive, mindful, and encouraging assessment reflection of about 45 words. 
+Start by acknowledging their strong effort. 
+Then, gently highlight the concepts from the questions they missed as areas for focused review. 
+End with a motivational note for their next study session.`;
+    }
+    
+    const response = await ai.models.generateContent({
+       model: 'gemini-2.5-flash',
+       contents: prompt,
+    });
+
+    return response.text;
+};
+
 
 /**
  * Handles follow-up questions using the initialized chat session.

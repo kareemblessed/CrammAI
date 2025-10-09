@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -10,6 +11,7 @@ import {
     apiGenerateStudyNotes,
     apiGenerateMnemonic,
     apiGeneratePracticeQuiz,
+    apiGenerateQuizReflection,
     apiChatWithDocuments,
     apiConnectLiveTutor,
     createBlob,
@@ -463,13 +465,30 @@ const MarkdownRenderer: React.FC<{ text?: string; className?: string }> = ({ tex
 };
 
 
-const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset }: {
+const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset, highlightedTopicName, setHighlightedTopicName }: {
     analysis: AnalysisResult | null;
     mode: Mode;
     onStudyTopic: (topic: Topic) => void;
     onStartQuiz: (topic: Topic) => void;
     onReset: () => void;
+    highlightedTopicName: string | null;
+    setHighlightedTopicName: (name: string | null) => void;
 }) => {
+    const highlightedTopicRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (highlightedTopicName && highlightedTopicRef.current) {
+            highlightedTopicRef.current.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center'
+            });
+
+            const timer = setTimeout(() => {
+                setHighlightedTopicName(null);
+            }, 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [highlightedTopicName, setHighlightedTopicName]);
 
     if (!analysis || !Array.isArray(analysis.study_these) || analysis.study_these.length === 0) {
         return (
@@ -501,42 +520,50 @@ const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset }: {
             <div className="triage-category">
                 <h2 className="triage-category-title">Focus On These Topics</h2>
                  <div className="topic-list">
-                    {study_these.map((topic, index) => (
-                        <div key={index} className="topic-item" style={{ animationDelay: `${index * 100}ms` }}>
-                           <div className="topic-content">
-                                <h3 className="topic-name">{topic.topic}</h3>
-                                <p className="topic-evidence">{topic.reason}</p>
-                                {topic.key_points && topic.key_points.length > 0 && (
-                                    <div className="key-points-section">
-                                        <h4 className="key-points-title">Key Concepts</h4>
-                                        <ul className="key-points-list">
-                                            {topic.key_points.map((point, i) => <li key={i}>{point}</li>)}
-                                        </ul>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="topic-actions">
-                                <button
-                                    onClick={() => onStudyTopic(topic)}
-                                    className="study-button"
-                                    disabled={!topic.notes || topic.notes.startsWith('Error:')}
-                                >
-                                    {!topic.notes ? (
-                                        <>
-                                            Generating Notes <div className="loading-spinner small-inline"></div>
-                                        </>
-                                    ) : topic.notes.startsWith('Error:') ? (
-                                        'Notes Failed'
-                                    ) : (
-                                        'Deep Dive →'
+                    {study_these.map((topic, index) => {
+                        const isHighlighted = topic.topic === highlightedTopicName;
+                        return (
+                            <div 
+                                key={index} 
+                                className={`topic-item ${isHighlighted ? 'highlighted' : ''}`} 
+                                style={{ animationDelay: `${index * 100}ms` }}
+                                ref={isHighlighted ? highlightedTopicRef : null}
+                            >
+                               <div className="topic-content">
+                                    <h3 className="topic-name">{topic.topic}</h3>
+                                    <p className="topic-evidence">{topic.reason}</p>
+                                    {topic.key_points && topic.key_points.length > 0 && (
+                                        <div className="key-points-section">
+                                            <h4 className="key-points-title">Key Concepts</h4>
+                                            <ul className="key-points-list">
+                                                {topic.key_points.map((point, i) => <li key={i}>{point}</li>)}
+                                            </ul>
+                                        </div>
                                     )}
-                                </button>
-                                <button onClick={() => onStartQuiz(topic)} className="study-button secondary">
-                                    Practice Quiz 🧠
-                                </button>
+                                </div>
+                                <div className="topic-actions">
+                                    <button
+                                        onClick={() => onStudyTopic(topic)}
+                                        className="study-button"
+                                        disabled={!topic.notes || topic.notes.startsWith('Error:')}
+                                    >
+                                        {!topic.notes ? (
+                                            <>
+                                                Generating Notes <div className="loading-spinner small-inline"></div>
+                                            </>
+                                        ) : topic.notes.startsWith('Error:') ? (
+                                            'Notes Failed'
+                                        ) : (
+                                            'Deep Dive →'
+                                        )}
+                                    </button>
+                                    <button onClick={() => onStartQuiz(topic)} className="study-button secondary">
+                                        Practice Quiz 🧠
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
             
@@ -801,11 +828,12 @@ const QuizPage = ({ topic, questions, onBack, onFinish }: {
     topic: Topic;
     questions: QuizQuestion[];
     onBack: () => void;
-    onFinish: (score: number, total: number) => void;
+    onFinish: (score: number, total: number, incorrectQuestions: QuizQuestion[]) => void;
 }) => {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
     const [score, setScore] = useState(0);
+    const [incorrectQuestions, setIncorrectQuestions] = useState<QuizQuestion[]>([]);
     
     const currentQuestion = questions[currentIndex];
 
@@ -815,6 +843,8 @@ const QuizPage = ({ topic, questions, onBack, onFinish }: {
         setSelectedAnswer(option);
         if (option === currentQuestion.correct_answer) {
             setScore(s => s + 1);
+        } else {
+            setIncorrectQuestions(prev => [...prev, currentQuestion]);
         }
     };
 
@@ -823,7 +853,7 @@ const QuizPage = ({ topic, questions, onBack, onFinish }: {
             setCurrentIndex(prev => prev + 1);
             setSelectedAnswer(null);
         } else {
-            onFinish(score, questions.length);
+            onFinish(score, questions.length, incorrectQuestions);
         }
     };
 
@@ -874,10 +904,11 @@ const QuizPage = ({ topic, questions, onBack, onFinish }: {
     );
 };
 
-const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
+const QuizSummaryPage = ({ topic, score, total, reflection, onRetry, onBack }: {
     topic: Topic;
     score: number;
     total: number;
+    reflection: string;
     onRetry: () => void;
     onBack: () => void;
 }) => {
@@ -901,6 +932,10 @@ const QuizSummaryPage = ({ topic, score, total, onRetry, onBack }: {
                     <div className="summary-accuracy">{accuracy}% Accuracy</div>
                 </div>
                 <p className="summary-message">{getSummaryMessage()}</p>
+                <div className="summary-reflection">
+                    <h2 className="reflection-title">💡 Assessment Reflection</h2>
+                    <p className="reflection-text">{reflection}</p>
+                </div>
                 <div className="summary-actions">
                     <button onClick={onRetry} className="summary-button primary">
                         Try Again
@@ -1149,8 +1184,9 @@ const App = () => {
     const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
     const [currentTopic, setCurrentTopic] = useState<Topic | null>(null);
     const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[] | null>(null);
-    const [quizScore, setQuizScore] = useState<{score: number, total: number} | null>(null);
+    const [quizSummary, setQuizSummary] = useState<{score: number, total: number, reflection: string} | null>(null);
     const [isTutorActive, setIsTutorActive] = useState(false);
+    const [highlightedTopicName, setHighlightedTopicName] = useState<string | null>(null);
 
     const theme = getStatus(mode);
     
@@ -1171,7 +1207,8 @@ const App = () => {
         setAnalysis(null);
         setCurrentTopic(null);
         setQuizQuestions(null);
-        setQuizScore(null);
+        setQuizSummary(null);
+        setHighlightedTopicName(null);
         setIsTutorActive(false);
     };
 
@@ -1186,6 +1223,7 @@ const App = () => {
     };
     
     const handleBackToResults = () => {
+        setHighlightedTopicName(currentTopic?.topic ?? null);
         setView('results');
         setCurrentTopic(null);
         setQuizQuestions(null);
@@ -1279,10 +1317,29 @@ const App = () => {
         }
     }
     
-    const handleFinishQuiz = (score: number, total: number) => {
-        setQuizScore({ score, total });
-        setView('quiz-summary');
-    }
+    const handleFinishQuiz = async (score: number, total: number, incorrectQuestions: QuizQuestion[]) => {
+        setView('loading');
+        if (!currentTopic) {
+            console.error("No current topic found for quiz summary.");
+            setView('results');
+            return;
+        }
+
+        try {
+            const reflection = await apiGenerateQuizReflection(currentTopic, score, total, incorrectQuestions);
+            setQuizSummary({ score, total, reflection });
+        } catch (e) {
+            console.error("Failed to generate quiz reflection:", e);
+            // Provide a fallback reflection on error
+            setQuizSummary({ 
+                score, 
+                total, 
+                reflection: "Great effort on the quiz! Keep reviewing the material to solidify your understanding." 
+            });
+        } finally {
+            setView('quiz-summary');
+        }
+    };
     
     const handleRetryQuiz = () => {
         if (currentTopic && quizQuestions) {
@@ -1323,6 +1380,8 @@ const App = () => {
                     onStudyTopic={handleStudyTopic}
                     onStartQuiz={handleStartQuiz}
                     onReset={handleReset}
+                    highlightedTopicName={highlightedTopicName}
+                    setHighlightedTopicName={setHighlightedTopicName}
                 />;
             case 'study':
                 return <StudyPage 
@@ -1341,8 +1400,9 @@ const App = () => {
             case 'quiz-summary':
                 return <QuizSummaryPage
                     topic={currentTopic!}
-                    score={quizScore!.score}
-                    total={quizScore!.total}
+                    score={quizSummary!.score}
+                    total={quizSummary!.total}
+                    reflection={quizSummary!.reflection}
                     onRetry={handleRetryQuiz}
                     onBack={handleBackToResults}
                 />;
