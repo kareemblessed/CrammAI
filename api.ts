@@ -2,7 +2,12 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Part, Type, Chat, LiveSession, LiveServerMessage, Modality, Blob } from "@google/genai";
+// Fix: Removed non-exported 'LiveSession' from import.
+import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob } from "@google/genai";
+// Fix: Use named import for initializeApp for Firebase v9+ compatibility.
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut as firebaseSignOut, type User, type Auth } from 'firebase/auth';
+
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -44,6 +49,75 @@ export interface LiveCallbacks {
   onerror: (event: ErrorEvent) => void;
   onclose: (event: CloseEvent) => void;
 }
+
+
+// --- FIREBASE AUTHENTICATION ---
+
+// Your Firebase project configuration is read from environment variables
+// for security. These are configured in your hosting environment's settings.
+export const firebaseConfig = {
+    apiKey: process.env.FIREBASE_API_KEY,
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.FIREBASE_APP_ID
+};
+
+// --- LAZY INITIALIZATION TO PREVENT CRASH ON LOAD ---
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+const googleProvider = new GoogleAuthProvider();
+
+/**
+ * Lazily initializes Firebase and returns the Auth instance.
+ * This prevents the app from crashing on load if Firebase environment
+ * variables are missing.
+ */
+function getFirebaseAuth(): Auth | null {
+    if (!auth) {
+        // Only attempt to initialize if the essential config keys are present.
+        if (firebaseConfig.apiKey && firebaseConfig.authDomain) {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                // Ensure auth remains null if initialization fails.
+                auth = null;
+            }
+        }
+    }
+    return auth;
+}
+
+export const signInWithGoogle = () => {
+    const authInstance = getFirebaseAuth();
+    if (!authInstance) {
+        throw new Error("Firebase is not configured correctly. Please check your environment variables.");
+    }
+    return signInWithPopup(authInstance, googleProvider);
+};
+
+export const signOut = () => {
+    const authInstance = getFirebaseAuth();
+    if (authInstance) {
+        return firebaseSignOut(authInstance);
+    }
+    return Promise.resolve();
+};
+
+export const onAuth = (callback: (user: User | null) => void) => {
+    const authInstance = getFirebaseAuth();
+    if (authInstance) {
+        return onAuthStateChanged(authInstance, callback);
+    }
+    // If Firebase isn't configured, the user is not logged in.
+    // Call back immediately and return a no-op unsubscribe function.
+    callback(null);
+    return () => {};
+};
+export type { User };
 
 
 // --- API INITIALIZATION & HELPERS ---
@@ -194,8 +268,11 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
         },
     });
 
-    const resultText = response.text?.trim();
+    let resultText = response.text?.trim();
     if (!resultText) throw new Error("Received an empty response from the AI.");
+    
+    // Clean potential markdown code block fences
+    resultText = resultText.replace(/^```json\s*/, '').replace(/```$/, '');
 
     const result = JSON.parse(resultText);
     if (!result || !Array.isArray(result.study_these)) {
@@ -225,7 +302,8 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
 /**
  * Connects to the Live API for a real-time AI Tutor session.
  */
-export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<LiveSession> => {
+// Fix: Changed return type from 'Promise<LiveSession>' to 'Promise<any>' as 'LiveSession' is not an exported type.
+export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<any> => {
     const systemInstruction = `You are an enthusiastic and patient AI study tutor named CrammAI. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
 
 **Your Persona:**
@@ -386,8 +464,11 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
         },
     });
 
-    const resultText = response.text;
+    let resultText = response.text;
     if (!resultText) throw new Error("Received an empty response from the AI for quiz generation.");
+
+    // Clean potential markdown code block fences
+    resultText = resultText.trim().replace(/^```json\s*/, '').replace(/```$/, '');
 
     return JSON.parse(resultText);
 }
