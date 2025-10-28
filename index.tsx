@@ -20,7 +20,6 @@ import {
     signOut,
     onAuth,
     type User,
-    getMissingFirebaseConfigKeys,
 } from './api';
 import type { Mode, Topic, AnalysisResult, MnemonicResult, QuizQuestion, ChatMessage } from './api';
 
@@ -274,24 +273,37 @@ const LoginPage = ({ onContinueAsGuest }: { onContinueAsGuest: () => void }) => 
     const [error, setError] = useState<string | null>(null);
 
     const handleSignIn = async () => {
-        const missingKeys = getMissingFirebaseConfigKeys();
-        if (missingKeys.length > 0) {
-            setError(`Firebase is not configured. The following required environment variables are missing: ${missingKeys.join(', ')}. Please ensure they are set correctly in your hosting environment.`);
-            return;
-        }
-
+        setError(null);
         try {
-            setError(null);
             await signInWithGoogle();
         } catch (err: any) {
             console.error("Sign in error", err);
-            if (err.code === 'auth/network-request-failed') {
-                setError("Sign-in failed due to a network error. Please check your internet connection and try again. If the problem persists, a firewall, ad-blocker, or browser extension might be blocking the request.");
-            } else if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-                // This isn't really an error, so we don't show a message.
-                setError(null);
-            } else {
-                 setError("Could not sign in with Google. Please double-check that your Firebase environment variables are correct and that Google Sign-In is enabled in your Firebase project's Authentication settings.");
+
+            // Check for our custom initialization errors first
+            if (err.message.startsWith('Firebase is not configured') || err.message.startsWith('Firebase initialization failed')) {
+                setError(err.message);
+                return;
+            }
+
+            // Now handle Firebase Auth errors from signInWithPopup
+            const code = err.code || 'unknown';
+            switch (code) {
+                case 'auth/network-request-failed':
+                    setError("Sign-in failed due to a network error. Please check your internet connection and try again.");
+                    break;
+                case 'auth/popup-closed-by-user':
+                case 'auth/cancelled-popup-request':
+                    // Not a real error, clear any existing message.
+                    setError(null);
+                    break;
+                case 'auth/unauthorized-domain':
+                    setError("This domain is not authorized for sign-in. Please add it to your Firebase project's 'Authentication -> Settings -> Authorized domains'.");
+                    break;
+                case 'auth/invalid-api-key':
+                     setError("The provided Firebase API Key is invalid. Please double-check the value of FIREBASE_API_KEY in your environment variables.");
+                    break;
+                default:
+                     setError(`Could not sign in with Google (Error: ${code}). Please double-check that your Firebase configuration is correct and that Google Sign-In is enabled in your Firebase project's Authentication settings.`);
             }
         }
     };

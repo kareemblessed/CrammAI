@@ -88,54 +88,79 @@ export function getMissingFirebaseConfigKeys(): string[] {
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 const googleProvider = new GoogleAuthProvider();
+let initializationError: Error | null = null; // Cache error to avoid re-running
 
 /**
- * Lazily initializes Firebase and returns the Auth instance.
- * This prevents the app from crashing on load if Firebase environment
- * variables are missing.
+ * Initializes Firebase. Throws an error on failure.
+ * Caches the result to avoid re-initialization.
  */
-function getFirebaseAuth(): Auth | null {
-    if (!auth) {
-        // Only attempt to initialize if the essential config keys are present.
-        if (firebaseConfig.apiKey && firebaseConfig.authDomain) {
-            try {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-            } catch (e) {
-                console.error("Firebase initialization failed:", e);
-                // Ensure auth remains null if initialization fails.
-                auth = null;
-            }
-        }
+function initializeFirebase(): void {
+    if (app) return; // Success: already initialized
+    if (initializationError) throw initializationError; // Failure: throw cached error
+
+    const missingKeys = getMissingFirebaseConfigKeys();
+    if (missingKeys.length > 0) {
+        initializationError = new Error(`Firebase is not configured. The following required environment variables are missing: ${missingKeys.join(', ')}.`);
+        throw initializationError;
     }
-    return auth;
+
+    try {
+        // Create a config object with non-null values to satisfy initializeApp requirements.
+        const validConfig = {
+            apiKey: process.env.FIREBASE_API_KEY!,
+            authDomain: process.env.FIREBASE_AUTH_DOMAIN!,
+            projectId: process.env.FIREBASE_PROJECT_ID!,
+            storageBucket: process.env.FIREBASE_STORAGE_BUCKET!,
+            messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID!,
+            appId: process.env.FIREBASE_APP_ID!
+        };
+        app = initializeApp(validConfig);
+        auth = getAuth(app);
+    } catch (e: any) {
+        console.error("Firebase initialization failed:", e);
+        initializationError = new Error(`Firebase initialization failed: ${e.message}. Please check that your environment variable values are correct and that this domain is authorized.`);
+        throw initializationError;
+    }
+}
+
+
+/**
+ * Returns the Auth instance. Requires initializeFirebase to have been called.
+ */
+function getFirebaseAuth(): Auth {
+    if (!auth) {
+        // This will throw if there's a problem.
+        initializeFirebase();
+    }
+    // initializeFirebase() would have thrown if auth is still null.
+    // The non-null assertion is safe here.
+    return auth!;
 }
 
 export const signInWithGoogle = () => {
+    // getFirebaseAuth will implicitly call the initializer and throw on error.
     const authInstance = getFirebaseAuth();
-    if (!authInstance) {
-        throw new Error("Firebase is not configured correctly. Please check your environment variables.");
-    }
     return signInWithPopup(authInstance, googleProvider);
 };
 
 export const signOut = () => {
-    const authInstance = getFirebaseAuth();
-    if (authInstance) {
-        return firebaseSignOut(authInstance);
+    // Don't initialize just to sign out if not already initialized
+    if (auth) {
+        return firebaseSignOut(auth);
     }
     return Promise.resolve();
 };
 
 export const onAuth = (callback: (user: User | null) => void) => {
-    const authInstance = getFirebaseAuth();
-    if (authInstance) {
+    try {
+        const authInstance = getFirebaseAuth();
         return onAuthStateChanged(authInstance, callback);
+    } catch (e) {
+        // Init failed. The user is not logged in.
+        // The error is already logged by initializeFirebase.
+        callback(null);
+        return () => {};
     }
-    // If Firebase isn't configured, the user is not logged in.
-    // Call back immediately and return a no-op unsubscribe function.
-    callback(null);
-    return () => {};
 };
 export type { User };
 
