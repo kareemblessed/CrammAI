@@ -38,9 +38,15 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/gif',
-  'image/webp'
+  'image/webp',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/mp4',
+  'audio/x-m4a',
 ];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_FILE_SIZE_AUDIO = 20 * 1024 * 1024; // 20 MB
+const MAX_FILE_SIZE_DEFAULT = 10 * 1024 * 1024; // 10 MB
 
 
 // --- UI HELPER FUNCTIONS ---
@@ -120,6 +126,7 @@ const getFileIcon = (fileName: string) => {
         case 'txt': return '📋';
         case 'pptx': case 'ppt': return '📊';
         case 'jpg': case 'jpeg': case 'png': case 'gif': return '🖼️';
+        case 'mp3': case 'wav': case 'm4a': case 'mpeg': return '🎧';
         default: return '📁';
     }
 };
@@ -470,10 +477,10 @@ const UploadPage = ({ mode, files, onBack, addFile, onRemoveFile, onGeneratePlan
                     <div className="suggestion-title">💡 What should you upload?</div>
                     <div className="suggestions">
                         <div className="suggestion">📋 Course syllabus (most important!)</div>
-                        <div className="suggestion">📝 Your class notes or study guide</div>
+                        <div className="suggestion">📝 Class notes or lecture recording</div>
                         <div className="suggestion">📄 Past exam or practice test</div>
                     </div>
-                    <div className="suggestion-note">Supported formats: PDF, TXT, JPG, PNG. Max 10MB per file.</div>
+                    <div className="suggestion-note">Supported formats: PDF, TXT, JPG, PNG, MP3, WAV, M4A. Max 20MB for audio, 10MB for other files.</div>
                 </div>
                  <button className="generate-button" disabled={isGenerateDisabled} onClick={onGeneratePlan}>
                     Generate My Study Plan
@@ -1253,7 +1260,24 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
                 </header>
 
                 <div className="tutor-visualizer">
-                    <div className={`tutor-orb ${status === 'connected' ? 'listening' : ''} ${isSpeaking ? 'speaking' : ''}`}></div>
+                    <div className={`tutor-orb ${status === 'connected' && !isSpeaking ? 'listening' : ''} ${isSpeaking ? 'speaking' : ''}`}>
+                        {!isSpeaking ? (
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tutor-icon">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        ) : (
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tutor-icon">
+                                <path d="M12 6v12"></path>
+                                <path d="M16 8v8"></path>
+                                <path d="M8 8v8"></path>
+                                <path d="M20 10v4"></path>
+                                <path d="M4 10v4"></path>
+                            </svg>
+                        )}
+                    </div>
                     <div className="tutor-status">{getStatusText()}</div>
                 </div>
 
@@ -1353,8 +1377,13 @@ const App = () => {
             alert(`File type not supported: ${file.type}. Please upload one of: ${ALLOWED_MIME_TYPES.join(', ')}`);
             return;
         }
-        if (file.size > MAX_FILE_SIZE) {
-            alert(`File is too large: ${formatFileSize(file.size)}. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`);
+
+        const isAudio = file.type.startsWith('audio/');
+        const maxSize = isAudio ? MAX_FILE_SIZE_AUDIO : MAX_FILE_SIZE_DEFAULT;
+        const maxSizeText = formatFileSize(maxSize);
+
+        if (file.size > maxSize) {
+            alert(`File is too large: ${formatFileSize(file.size)}. Maximum size for this file type is ${maxSizeText}.`);
             return;
         }
 
