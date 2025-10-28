@@ -20,7 +20,7 @@ import {
     signOut,
     onAuth,
     type User,
-    firebaseConfig,
+    getMissingFirebaseConfigKeys,
 } from './api';
 import type { Mode, Topic, AnalysisResult, MnemonicResult, QuizQuestion, ChatMessage } from './api';
 
@@ -274,8 +274,9 @@ const LoginPage = ({ onContinueAsGuest }: { onContinueAsGuest: () => void }) => 
     const [error, setError] = useState<string | null>(null);
 
     const handleSignIn = async () => {
-        if (!firebaseConfig.apiKey) {
-            setError("Firebase is not configured. Please ensure your Firebase environment variables (e.g., FIREBASE_API_KEY) are set correctly in your hosting environment.");
+        const missingKeys = getMissingFirebaseConfigKeys();
+        if (missingKeys.length > 0) {
+            setError(`Firebase is not configured. The following required environment variables are missing: ${missingKeys.join(', ')}. Please ensure they are set correctly in your hosting environment.`);
             return;
         }
 

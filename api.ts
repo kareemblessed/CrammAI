@@ -64,6 +64,26 @@ export const firebaseConfig = {
     appId: process.env.FIREBASE_APP_ID
 };
 
+/**
+ * Checks for missing Firebase configuration keys.
+ * @returns An array of strings, where each string is the name of a missing environment variable.
+ */
+export function getMissingFirebaseConfigKeys(): string[] {
+    const configMapping = {
+        'FIREBASE_API_KEY': firebaseConfig.apiKey,
+        'FIREBASE_AUTH_DOMAIN': firebaseConfig.authDomain,
+        'FIREBASE_PROJECT_ID': firebaseConfig.projectId,
+        'FIREBASE_STORAGE_BUCKET': firebaseConfig.storageBucket,
+        'FIREBASE_MESSAGING_SENDER_ID': firebaseConfig.messagingSenderId,
+        'FIREBASE_APP_ID': firebaseConfig.appId,
+    };
+    
+    return Object.entries(configMapping)
+        .filter(([, value]) => !value)
+        .map(([key]) => key);
+}
+
+
 // --- LAZY INITIALIZATION TO PREVENT CRASH ON LOAD ---
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
