@@ -267,40 +267,56 @@ ${topic.notes}
  * Generates detailed study notes for a specific topic.
  */
 export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
-    const prompt = `You are an expert educator and a master of clarity, tasked with creating a perfectly written study guide for the topic: "${topic.topic}". The student needs to understand this material deeply, not just memorize it.
+    const prompt = `You are an expert educator creating a high-quality study guide for the topic: "${topic.topic}".
+    The student needs to understand this material for an exam.
 
-Focus on these key concepts: ${topic.key_points?.join(', ')}.
+    Focus on these key concepts if they are provided: ${topic.key_points?.join(', ') || 'the main concepts of the topic'}.
 
-Your entire output must be well-structured, impeccably written, and follow this exact markdown format:
+    Please generate a clear and well-structured study guide using markdown. The goal is depth and understanding.
 
-### 🔎 Topic at a Glance
-A concise, 1-2 sentence executive summary of the entire topic.
+    Please follow this general structure:
 
----
+    ### 🔎 Topic Overview
+    A brief, one or two-sentence summary of the entire topic.
 
-(Create 3 to 4 sections below, one for each key concept)
+    ---
 
-#### Deep Dive: [Name of Key Concept 1] 💡
-*   **The Core Idea:** Explain this concept thoroughly in a detailed paragraph of approximately 30 words. It must be rich with information but easy to understand, providing a solid foundation.
-*   **Key Facts & Formulas:** A bulleted list of exactly 5 critical facts. Each point must be a complete, well-written sentence of approximately 17-20 words, providing substantial detail and making perfect sense on its own.
+    #### Key Concept: [Name of a Key Concept]
+    *   **Core Idea:** A clear explanation of the concept.
+    *   **Important Details:** A bulleted list with a few key facts, formulas, or details.
 
----
+    ---
 
-#### Deep Dive: [Name of Key Concept 2] 🔬
-(Follow the same structure: A ~30-word Core Idea and 5 detailed Key Facts in ~17-20 word sentences)
+    (Repeat for the most important key concepts)
 
----
-
-(continue for all key concepts)
-
-Do not include any text before the first heading. The tone must be authoritative, clear, and highly educational. The goal is depth and understanding, not just brevity. Ensure every sentence is meaningful and contributes to a perfect study guide.`;
+    Your tone should be clear, educational, and authoritative. Start your response directly with the first heading. Do not include any introductory text before it.`;
     
-    const response = await ai.models.generateContent({
-       model: 'gemini-2.5-flash',
-       contents: prompt,
-    });
+    const MAX_RETRIES = 3;
+    for (let i = 0; i < MAX_RETRIES; i++) {
+        try {
+            const response = await ai.models.generateContent({
+               model: 'gemini-2.5-flash',
+               contents: prompt,
+            });
 
-    return response.text;
+            const text = response.text;
+            if (text && text.trim().length > 20) { // Check for a non-trivial response
+                return text;
+            }
+            console.warn(`Attempt ${i + 1} for generating notes for "${topic.topic}" returned a short or empty response.`);
+        } catch (error) {
+            console.error(`Attempt ${i + 1} failed for generating notes for "${topic.topic}":`, error);
+            if (i === MAX_RETRIES - 1) {
+                // Last attempt failed, throw to be handled by UI
+                throw error;
+            }
+            // Wait a moment before the next retry
+            await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+        }
+    }
+
+    // This part will only be reached if all retries resulted in empty/short responses but no errors were thrown.
+    throw new Error("Failed to generate valid study notes after multiple attempts.");
 };
 
 
