@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -53,15 +54,33 @@ export interface LiveCallbacks {
 
 // --- FIREBASE AUTHENTICATION ---
 
+/**
+ * A helper function to safely read environment variables that might be
+ * prefixed for client-side exposure (e.g., by Vite or Create React App).
+ * @param key The base key (e.g., 'API_KEY').
+ * @returns The value of the environment variable, or undefined if not found.
+ */
+const getEnv = (key: string): string | undefined => {
+    const fullKey = `FIREBASE_${key}`;
+    // Check for standard, Vite, and Create React App prefixes
+    const prefixes = ['', 'VITE_', 'REACT_APP_'];
+    for (const prefix of prefixes) {
+        const envVar = process.env[`${prefix}${fullKey}`];
+        if (envVar) return envVar;
+    }
+    return undefined;
+};
+
+
 // Your Firebase project configuration is read from environment variables
-// for security. These are configured in your hosting environment's settings.
+// for security. This now automatically handles common framework prefixes.
 export const firebaseConfig = {
-    apiKey: process.env.FIREBASE_API_KEY,
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.FIREBASE_APP_ID
+    apiKey: getEnv('API_KEY'),
+    authDomain: getEnv('AUTH_DOMAIN'),
+    projectId: getEnv('PROJECT_ID'),
+    storageBucket: getEnv('STORAGE_BUCKET'),
+    messagingSenderId: getEnv('MESSAGING_SENDER_ID'),
+    appId: getEnv('APP_ID')
 };
 
 /**
@@ -100,19 +119,21 @@ function initializeFirebase(): void {
 
     const missingKeys = getMissingFirebaseConfigKeys();
     if (missingKeys.length > 0) {
-        initializationError = new Error(`Firebase is not configured. The following required environment variables are missing: ${missingKeys.join(', ')}.`);
+        const errorMessage = `Firebase is not configured. Could not find values for: ${missingKeys.join(', ')}. 
+Please ensure these are set in your environment. For browser apps, they often need a prefix like 'VITE_' or 'REACT_APP_'. This app automatically checks for those common prefixes, so please double-check your variable names.`;
+        initializationError = new Error(errorMessage);
         throw initializationError;
     }
 
     try {
-        // Create a config object with non-null values to satisfy initializeApp requirements.
+        // The missing keys check guarantees these values exist.
         const validConfig = {
-            apiKey: process.env.FIREBASE_API_KEY!,
-            authDomain: process.env.FIREBASE_AUTH_DOMAIN!,
-            projectId: process.env.FIREBASE_PROJECT_ID!,
-            storageBucket: process.env.FIREBASE_STORAGE_BUCKET!,
-            messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID!,
-            appId: process.env.FIREBASE_APP_ID!
+            apiKey: firebaseConfig.apiKey!,
+            authDomain: firebaseConfig.authDomain!,
+            projectId: firebaseConfig.projectId!,
+            storageBucket: firebaseConfig.storageBucket!,
+            messagingSenderId: firebaseConfig.messagingSenderId!,
+            appId: firebaseConfig.appId!
         };
         app = initializeApp(validConfig);
         auth = getAuth(app);
