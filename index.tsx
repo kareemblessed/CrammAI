@@ -16,10 +16,6 @@ import {
     createBlob,
     decode,
     decodeAudioData,
-    signInWithGoogle,
-    signOut,
-    onAuth,
-    type User,
 } from './api';
 import type { Mode, Topic, AnalysisResult, MnemonicResult, QuizQuestion, ChatMessage } from './api';
 
@@ -227,114 +223,6 @@ const BackgroundEffects = ({ mode }: { mode: Mode | null }) => {
     );
 };
 
-const UserProfile = ({ user, onSignOut }: { user: User; onSignOut: () => void; }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const profileRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
-                setIsOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    return (
-        <div className="user-profile" ref={profileRef}>
-            <button className="profile-button" onClick={() => setIsOpen(!isOpen)} aria-label="Open user menu">
-                {user.photoURL ? (
-                    <img src={user.photoURL} alt="User profile" className="profile-avatar" />
-                ) : (
-                    <div className="profile-avatar-fallback">{user.displayName?.[0]}</div>
-                )}
-            </button>
-            {isOpen && (
-                <div className="profile-dropdown">
-                    <div className="user-info">
-                        <div className="user-name">{user.displayName}</div>
-                        <div className="user-email">{user.email}</div>
-                    </div>
-                    <button onClick={onSignOut} className="sign-out-button">Sign Out</button>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const GuestProfile = ({ onSignIn }: { onSignIn: () => void; }) => (
-    <button onClick={onSignIn} className="sign-in-button">
-        Sign In
-    </button>
-);
-
-const LoginPage = ({ onContinueAsGuest }: { onContinueAsGuest: () => void }) => {
-    const [error, setError] = useState<string | null>(null);
-
-    const handleSignIn = async () => {
-        setError(null);
-        try {
-            await signInWithGoogle();
-        } catch (err: any) {
-            console.error("Sign in error", err);
-
-            // Check for our custom initialization errors first
-            if (err.message.startsWith('Firebase is not configured') || err.message.startsWith('Firebase initialization failed')) {
-                setError(err.message);
-                return;
-            }
-
-            // Now handle Firebase Auth errors from signInWithPopup
-            const code = err.code || 'unknown';
-            switch (code) {
-                case 'auth/network-request-failed':
-                    setError("Sign-in failed due to a network error. Please check your internet connection and try again.");
-                    break;
-                case 'auth/popup-closed-by-user':
-                case 'auth/cancelled-popup-request':
-                    // Not a real error, clear any existing message.
-                    setError(null);
-                    break;
-                case 'auth/unauthorized-domain':
-                    setError("This domain is not authorized for sign-in. Please add it to your Firebase project's 'Authentication -> Settings -> Authorized domains'.");
-                    break;
-                case 'auth/invalid-api-key':
-                     setError("The provided Firebase API Key is invalid. Please double-check the value of FIREBASE_API_KEY in your environment variables.");
-                    break;
-                default:
-                     setError(`Could not sign in with Google (Error: ${code}). Please double-check that your Firebase configuration is correct and that Google Sign-In is enabled in your Firebase project's Authentication settings.`);
-            }
-        }
-    };
-
-    return (
-        <section className="login-view view-container">
-            <div className="login-box">
-                <header className="page-header">
-                    <h1>Your AI Study Co-pilot</h1>
-                    <p className="subtitle">Sign in to generate personalized study plans from your course materials.</p>
-                </header>
-                {error && <div className="error-message">{error}</div>}
-                <button onClick={handleSignIn} className="google-signin-button">
-                    <svg className="google-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M22.56 12.25C22.56 11.45 22.49 10.68 22.36 9.92H12V14.51H18.04C17.72 16.03 16.84 17.33 15.55 18.23V21.09H19.5C21.46 19.23 22.56 16.05 22.56 12.25Z" fill="#4285F4"/>
-                        <path d="M12 23C14.97 23 17.45 22.02 19.5 20.42L15.55 17.56C14.59 18.25 13.38 18.67 12 18.67C9.31 18.67 7.02 16.91 6.13 14.51H2.08V17.47C4.04 20.84 7.73 23 12 23Z" fill="#34A853"/>
-                        <path d="M6.13 14.51C5.88 13.76 5.75 12.9 5.75 12C5.75 11.1 5.88 10.24 6.13 9.49V6.53H2.08C1.25 8.24 0.75 10.06 0.75 12C0.75 13.94 1.25 15.76 2.08 17.47L6.13 14.51Z" fill="#FBBC05"/>
-                        <path d="M12 5.33C13.56 5.33 14.93 5.89 16.01 6.92L19.59 3.41C17.45 1.56 14.97 0.5 12 0.5C7.73 0.5 4.04 2.66 2.08 6.03L6.13 8.99C7.02 6.59 9.31 5.33 12 5.33Z" fill="#EA4335"/>
-                    </svg>
-                    Sign in with Google
-                </button>
-                <div className="or-divider">or</div>
-                <button onClick={onContinueAsGuest} className="guest-button">
-                    Continue as Guest
-                </button>
-            </div>
-        </section>
-    );
-};
-
-
 const FilePreview = ({ file, onRemove }: { file: File, onRemove: (e: React.MouseEvent) => void }) => (
     <div className="file-preview-container" aria-label={`File preview for ${file.name}`}>
         <div className="file-icon" aria-hidden="true">{getFileIcon(file.name)}</div>
@@ -503,7 +391,7 @@ const UploadPage = ({ mode, files, onBack, addFile, onRemoveFile, onGeneratePlan
     );
 };
 
-const LoadingPage = ({ mode, isAuthCheck = false }: { mode: Mode | null, isAuthCheck?: boolean }) => {
+const LoadingPage = ({ mode }: { mode: Mode | null }) => {
     const quotes = useMemo(() => [
         `"The secret of getting ahead is getting started." - Mark Twain`,
         `"Success is not final, failure is not fatal: it is the courage to continue that counts." - Winston Churchill`,
@@ -525,8 +413,8 @@ const LoadingPage = ({ mode, isAuthCheck = false }: { mode: Mode | null, isAuthC
     return (
         <div className="loading-view">
             <div className="loading-spinner" />
-            <div className="loading-text">{isAuthCheck ? 'Initializing...' : 'CrammAI is Thinking'}</div>
-            {!isAuthCheck && <p className="loading-quote">{quote}</p>}
+            <div className="loading-text">CrammAI is Thinking</div>
+            <p className="loading-quote">{quote}</p>
         </div>
     );
 };
@@ -1311,11 +1199,6 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
 
 
 const App = () => {
-    // Auth state
-    const [user, setUser] = useState<User | null>(null);
-    const [authLoading, setAuthLoading] = useState(true);
-    const [isGuest, setIsGuest] = useState(false);
-
     // App state
     const [view, setView] = useState<View>('home');
     const [mode, setMode] = useState<Mode | null>(null);
@@ -1329,15 +1212,6 @@ const App = () => {
     const [highlightedTopicName, setHighlightedTopicName] = useState<string | null>(null);
 
     const theme = getStatus(mode);
-
-    // Subscribe to auth state changes
-    useEffect(() => {
-        const unsubscribe = onAuth(currentUser => {
-            setUser(currentUser);
-            setAuthLoading(false);
-        });
-        return () => unsubscribe();
-    }, []);
     
     // Apply theme to body and set dynamic CSS variables
     useEffect(() => {
@@ -1359,12 +1233,6 @@ const App = () => {
         setQuizSummary(null);
         setHighlightedTopicName(null);
         setIsTutorActive(false);
-        setIsGuest(false);
-    };
-
-    const handleSignOut = async () => {
-        await signOut();
-        handleReset();
     };
 
     const handleSelectMode = (selectedMode: Mode) => {
@@ -1518,10 +1386,6 @@ const App = () => {
         setIsTutorActive(false);
     };
 
-    const handleContinueAsGuest = () => {
-        setIsGuest(true);
-    };
-
     const renderView = () => {
         switch (view) {
             case 'home':
@@ -1575,43 +1439,12 @@ const App = () => {
         }
     };
 
-    if (authLoading) {
-        return (
-            <>
-                <BackgroundEffects mode={null} />
-                <LoadingPage mode={null} isAuthCheck={true} />
-            </>
-        );
-    }
-    
-    if (!user && !isGuest) {
-        return (
-            <>
-                <BackgroundEffects mode={null} />
-                <div className="container">
-                    <header className="app-header">
-                        <CrammAIEmblem />
-                    </header>
-                    <main>
-                       <LoginPage onContinueAsGuest={handleContinueAsGuest} />
-                    </main>
-                </div>
-            </>
-        );
-    }
-
-
     return (
         <>
             <BackgroundEffects mode={mode} />
             <div className="container">
                 <header className="app-header">
                     <CrammAIEmblem />
-                    {user ? (
-                        <UserProfile user={user} onSignOut={handleSignOut} />
-                    ) : (
-                        <GuestProfile onSignIn={handleReset} />
-                    )}
                 </header>
                 <main>
                     {error && <div className="error-message">{error}</div>}

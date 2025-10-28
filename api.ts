@@ -1,14 +1,8 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-// Fix: Removed non-exported 'LiveSession' from import.
 import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob } from "@google/genai";
-// Fix: Use named import for initializeApp for Firebase v9+ compatibility.
-import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut as firebaseSignOut, type User, type Auth } from 'firebase/auth';
-
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -50,140 +44,6 @@ export interface LiveCallbacks {
   onerror: (event: ErrorEvent) => void;
   onclose: (event: CloseEvent) => void;
 }
-
-
-// --- FIREBASE AUTHENTICATION ---
-
-/**
- * A helper function to safely read environment variables that might be
- * prefixed for client-side exposure (e.g., by Vite or Create React App).
- * @param key The base key (e.g., 'API_KEY').
- * @returns The value of the environment variable, or undefined if not found.
- */
-const getEnv = (key: string): string | undefined => {
-    const fullKey = `FIREBASE_${key}`;
-    // Check for standard, Vite, and Create React App prefixes
-    const prefixes = ['', 'VITE_', 'REACT_APP_'];
-    for (const prefix of prefixes) {
-        const envVar = process.env[`${prefix}${fullKey}`];
-        if (envVar) return envVar;
-    }
-    return undefined;
-};
-
-
-// Your Firebase project configuration is read from environment variables
-// for security. This now automatically handles common framework prefixes.
-export const firebaseConfig = {
-    apiKey: getEnv('API_KEY'),
-    authDomain: getEnv('AUTH_DOMAIN'),
-    projectId: getEnv('PROJECT_ID'),
-    storageBucket: getEnv('STORAGE_BUCKET'),
-    messagingSenderId: getEnv('MESSAGING_SENDER_ID'),
-    appId: getEnv('APP_ID')
-};
-
-/**
- * Checks for missing Firebase configuration keys.
- * @returns An array of strings, where each string is the name of a missing environment variable.
- */
-export function getMissingFirebaseConfigKeys(): string[] {
-    const configMapping = {
-        'FIREBASE_API_KEY': firebaseConfig.apiKey,
-        'FIREBASE_AUTH_DOMAIN': firebaseConfig.authDomain,
-        'FIREBASE_PROJECT_ID': firebaseConfig.projectId,
-        'FIREBASE_STORAGE_BUCKET': firebaseConfig.storageBucket,
-        'FIREBASE_MESSAGING_SENDER_ID': firebaseConfig.messagingSenderId,
-        'FIREBASE_APP_ID': firebaseConfig.appId,
-    };
-    
-    return Object.entries(configMapping)
-        .filter(([, value]) => !value)
-        .map(([key]) => key);
-}
-
-
-// --- LAZY INITIALIZATION TO PREVENT CRASH ON LOAD ---
-let app: FirebaseApp | null = null;
-let auth: Auth | null = null;
-const googleProvider = new GoogleAuthProvider();
-let initializationError: Error | null = null; // Cache error to avoid re-running
-
-/**
- * Initializes Firebase. Throws an error on failure.
- * Caches the result to avoid re-initialization.
- */
-function initializeFirebase(): void {
-    if (app) return; // Success: already initialized
-    if (initializationError) throw initializationError; // Failure: throw cached error
-
-    const missingKeys = getMissingFirebaseConfigKeys();
-    if (missingKeys.length > 0) {
-        const errorMessage = `Firebase is not configured. Could not find values for: ${missingKeys.join(', ')}. 
-Please ensure these are set in your environment. For browser apps, they often need a prefix like 'VITE_' or 'REACT_APP_'. This app automatically checks for those common prefixes, so please double-check your variable names.`;
-        initializationError = new Error(errorMessage);
-        throw initializationError;
-    }
-
-    try {
-        // The missing keys check guarantees these values exist.
-        const validConfig = {
-            apiKey: firebaseConfig.apiKey!,
-            authDomain: firebaseConfig.authDomain!,
-            projectId: firebaseConfig.projectId!,
-            storageBucket: firebaseConfig.storageBucket!,
-            messagingSenderId: firebaseConfig.messagingSenderId!,
-            appId: firebaseConfig.appId!
-        };
-        app = initializeApp(validConfig);
-        auth = getAuth(app);
-    } catch (e: any) {
-        console.error("Firebase initialization failed:", e);
-        initializationError = new Error(`Firebase initialization failed: ${e.message}. Please check that your environment variable values are correct and that this domain is authorized.`);
-        throw initializationError;
-    }
-}
-
-
-/**
- * Returns the Auth instance. Requires initializeFirebase to have been called.
- */
-function getFirebaseAuth(): Auth {
-    if (!auth) {
-        // This will throw if there's a problem.
-        initializeFirebase();
-    }
-    // initializeFirebase() would have thrown if auth is still null.
-    // The non-null assertion is safe here.
-    return auth!;
-}
-
-export const signInWithGoogle = () => {
-    // getFirebaseAuth will implicitly call the initializer and throw on error.
-    const authInstance = getFirebaseAuth();
-    return signInWithPopup(authInstance, googleProvider);
-};
-
-export const signOut = () => {
-    // Don't initialize just to sign out if not already initialized
-    if (auth) {
-        return firebaseSignOut(auth);
-    }
-    return Promise.resolve();
-};
-
-export const onAuth = (callback: (user: User | null) => void) => {
-    try {
-        const authInstance = getFirebaseAuth();
-        return onAuthStateChanged(authInstance, callback);
-    } catch (e) {
-        // Init failed. The user is not logged in.
-        // The error is already logged by initializeFirebase.
-        callback(null);
-        return () => {};
-    }
-};
-export type { User };
 
 
 // --- API INITIALIZATION & HELPERS ---
@@ -371,7 +231,6 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
 /**
  * Connects to the Live API for a real-time AI Tutor session.
  */
-// Fix: Changed return type from 'Promise<LiveSession>' to 'Promise<any>' as 'LiveSession' is not an exported type.
 export const apiConnectLiveTutor = (topic: Topic, callbacks: LiveCallbacks): Promise<any> => {
     const systemInstruction = `You are an enthusiastic and patient AI study tutor named CrammAI. Your goal is to help a student master the topic of "${topic.topic}". You have access to their study notes.
 
