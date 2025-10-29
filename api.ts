@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob } from "@google/genai";
+import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob, GenerateContentResponse } from "@google/genai";
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -36,6 +36,7 @@ export interface QuizQuestion {
 export interface ChatMessage {
     role: 'user' | 'model';
     text: string;
+    imageUrl?: string;
 }
 
 export interface LiveCallbacks {
@@ -54,6 +55,7 @@ declare global {
         prompt: (prompt: string) => Promise<string>;
         destroy: () => void;
       }>;
+      summarize?: (options: { text: string }) => Promise<{ summary: string }>;
     };
   }
 }
@@ -514,15 +516,27 @@ End with a motivational note for their next study session.`;
     return response.text;
 };
 
-
 /**
- * Handles follow-up questions using the initialized chat session.
+ * Handles follow-up questions using the initialized chat session, returning a stream.
+ * Supports multimodal (image) input.
  */
-export const apiChatWithDocuments = async (message: string): Promise<string> => {
+export const apiChatWithDocumentsStream = async (message: string, imageFile?: File): Promise<AsyncGenerator<GenerateContentResponse>> => {
     if (!chat) {
         throw new Error("Chat not initialized. Please generate a study plan first.");
     }
-    
-    const response = await chat.sendMessage({ message });
-    return response.text;
+
+    const wordLimit = imageFile ? 250 : 230;
+    // Append a summarization instruction to the user's message to ensure a concise response in a single API call.
+    const summarizationInstruction = `\n\n(Important: Please keep your response concise and under approximately ${wordLimit} words.)`;
+    const fullMessage = message + summarizationInstruction;
+
+    const messageParts: Part[] = [{ text: fullMessage }];
+
+    if (imageFile) {
+        const imagePart = await fileToGenerativePart(imageFile);
+        messageParts.unshift(imagePart); // Resulting parts: [image, text]
+    }
+
+    const responseStream = await chat.sendMessageStream({ message: messageParts });
+    return responseStream;
 };

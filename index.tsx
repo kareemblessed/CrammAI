@@ -11,7 +11,7 @@ import {
     apiGenerateMnemonic,
     apiGeneratePracticeQuiz,
     apiGenerateQuizReflection,
-    apiChatWithDocuments,
+    apiChatWithDocumentsStream,
     apiConnectLiveTutor,
     createBlob,
     decode,
@@ -716,8 +716,11 @@ const ChatStudio = () => {
     ]);
     const [userInput, setUserInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [imageFile, setImageFile] = useState<File | null>(null);
+    const [imagePreview, setImagePreview] = useState<string | null>(null);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -725,23 +728,73 @@ const ChatStudio = () => {
 
     useEffect(scrollToBottom, [messages]);
 
+    const clearImage = () => {
+        setImageFile(null);
+        setImagePreview(null);
+        if (imageInputRef.current) {
+            imageInputRef.current.value = '';
+        }
+    };
+
+    const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            if (file.size > MAX_FILE_SIZE_DEFAULT) {
+                alert(`Image is too large. Max size is ${formatFileSize(MAX_FILE_SIZE_DEFAULT)}.`);
+                return;
+            }
+            setImageFile(file);
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setImagePreview(reader.result as string);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+    
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!userInput.trim() || isLoading) return;
+        if ((!userInput.trim() && !imageFile) || isLoading) return;
 
-        const newUserMessage: ChatMessage = { role: 'user', text: userInput };
-        setMessages(prev => [...prev, newUserMessage]);
+        const currentInput = userInput;
+        const currentImageFile = imageFile;
+
+        const newUserMessage: ChatMessage = {
+            role: 'user',
+            text: userInput,
+            imageUrl: imagePreview,
+        };
+
+        // Add user message and an empty model message placeholder for streaming
+        const modelPlaceholderMessage: ChatMessage = { role: 'model', text: '' };
+        setMessages(prev => [...prev, newUserMessage, modelPlaceholderMessage]);
+
         setUserInput('');
+        clearImage();
         setIsLoading(true);
-        setError(null);
 
         try {
-            const modelResponse = await apiChatWithDocuments(userInput);
-            const newModelMessage: ChatMessage = { role: 'model', text: modelResponse };
-            setMessages(prev => [...prev, newModelMessage]);
+            const stream = await apiChatWithDocumentsStream(currentInput, currentImageFile || undefined);
+
+            for await (const chunk of stream) {
+                const chunkText = chunk.text;
+                setMessages(prev => {
+                    const lastMessage = prev[prev.length - 1];
+                    const updatedLastMessage = { ...lastMessage, text: lastMessage.text + chunkText };
+                    return [...prev.slice(0, -1), updatedLastMessage];
+                });
+            }
         } catch (e) {
             console.error("Chat error:", e);
-            setError("Sorry, I couldn't get a response. Please try again.");
+            const errorMessage = "\n\n**Sorry, I couldn't get a response. Please try again.**";
+            setMessages(prev => {
+                const lastMessage = prev[prev.length - 1];
+                if (lastMessage && lastMessage.role === 'model') {
+                    const updatedLastMessage = { ...lastMessage, text: lastMessage.text + errorMessage };
+                    return [...prev.slice(0, -1), updatedLastMessage];
+                }
+                return [...prev, { role: 'model', text: errorMessage.trim() }];
+            });
         } finally {
             setIsLoading(false);
         }
@@ -753,20 +806,38 @@ const ChatStudio = () => {
             <div className="chat-messages">
                 {messages.map((msg, index) => (
                     <div key={index} className={`chat-message ${msg.role}`}>
-                        <MarkdownRenderer text={msg.text} />
+                        {msg.imageUrl && <img src={msg.imageUrl} alt="User upload" className="chat-image" />}
+                        {msg.text && <MarkdownRenderer text={msg.text} />}
                     </div>
                 ))}
-                {isLoading && (
-                     <div className="chat-message model">
-                        <div className="typing-indicator">
-                            <span></span><span></span><span></span>
-                        </div>
-                    </div>
-                )}
-                {error && <div className="error-message">{error}</div>}
                 <div ref={messagesEndRef} />
             </div>
+            
+            {imagePreview && (
+                <div className="chat-image-preview-container">
+                    <img src={imagePreview} alt="Preview" className="chat-image-preview" />
+                    <button onClick={clearImage} className="chat-remove-image-button">&times;</button>
+                </div>
+            )}
+
             <form className="chat-input-form" onSubmit={handleSubmit}>
+                <input
+                    type="file"
+                    ref={imageInputRef}
+                    onChange={handleImageSelect}
+                    style={{ display: 'none' }}
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    aria-hidden="true"
+                />
+                <button 
+                    type="button" 
+                    className="attach-button" 
+                    onClick={() => imageInputRef.current?.click()} 
+                    aria-label="Attach image"
+                    title="Attach image"
+                >
+                   🖼️
+                </button>
                 <input
                     type="text"
                     value={userInput}
@@ -775,7 +846,7 @@ const ChatStudio = () => {
                     disabled={isLoading}
                     aria-label="Chat input"
                 />
-                <button type="submit" disabled={isLoading || !userInput.trim()}>Send</button>
+                <button type="submit" disabled={isLoading || (!userInput.trim() && !imageFile)}>Send</button>
             </form>
         </div>
     );
