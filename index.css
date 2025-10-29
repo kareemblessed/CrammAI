@@ -721,7 +721,13 @@ input[type="file"] {
 }
 .notes-content li { margin-bottom: 0.5em; }
 .notes-content strong { color: var(--dynamic-primary); }
-.notes-content .latex { font-family: 'Times New Roman', serif; font-style: italic; }
+
+.display-math {
+    text-align: center;
+    margin: 1em 0;
+    font-size: 1.1em;
+}
+
 
 /* Custom Scrollbar for Notes */
 .notes-content::-webkit-scrollbar {

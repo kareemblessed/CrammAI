@@ -45,6 +45,19 @@ export interface LiveCallbacks {
   onclose: (event: CloseEvent) => void;
 }
 
+// Add types for Chrome's built-in AI (window.ai)
+declare global {
+  interface Window {
+    ai?: {
+      canCreateTextSession: () => Promise<'readily' | 'after-prompt' | 'no'>;
+      createTextSession: () => Promise<{
+        prompt: (prompt: string) => Promise<string>;
+        destroy: () => void;
+      }>;
+    };
+  }
+}
+
 
 // --- API INITIALIZATION & HELPERS ---
 
@@ -265,14 +278,52 @@ ${topic.notes}
 
 /**
  * Generates detailed study notes for a specific topic.
+ * Prefers on-device AI (Chrome's window.ai) and falls back to server-side API.
  */
 export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
     const prompt = `You are an expert educator creating a high-quality study guide for the topic: "${topic.topic}".
     The student needs to understand this material for an exam.
 
-    Focus on these key concepts if they are provided: ${topic.key_points?.join(', ') || 'the main concepts of the topic'}.
+    When writing mathematical formulas, constants, and variables, you MUST follow these formatting and structure rules precisely.
 
-    Please generate a clear and well-structured study guide using markdown. The goal is depth and understanding.
+    **Formatting Rules:**
+
+    1.  **NO LaTeX Syntax:** Your output must contain no LaTeX. Do not use any LaTeX commands, dollar signs ($), backslashes (\\), carets (^), or underscores (_). Output plain, readable text with Unicode characters.
+
+    2.  **Bold and Italic Styling:**
+        *   Wrap **entire** mathematical equations, formulas, and expressions in markdown's triple-asterisk syntax (\`***...***\`) to make them bold and italic.
+        *   When variables or units are mentioned in plain text, they should also be styled with bold italics. Example: "The unit for work is the ***joule (J)***."
+
+    3.  **Proper Symbols and Characters:**
+        *   Use '×' for multiplication (not '*' or '·').
+        *   Use '°' for degrees.
+        *   Render Greek letters (e.g., θ, α, β) as their standard unicode characters inside the bold-italic block.
+        *   Use a proper minus sign '−' instead of a hyphen '-'.
+
+    4.  **Fractions:**
+        *   Write fractions with parentheses and a forward slash '/'.
+        *   Example: \`***Fg = (G × m₁ × m₂) / r²***\`
+        *   Example: \`***a = (v² − u²) / (2 × s)***\`
+
+    5.  **Subscripts and Superscripts:**
+        *   Use unicode subscript and superscript characters directly (e.g., ₁, ₂, ², ⁻¹¹).
+        *   Example: \`***m₁***\`, \`***r²***\`, \`***10⁻¹¹***\`.
+
+    6.  **Structure:**
+        *   Keep section headers (e.g., Key Concept) bold using markdown's \`**...**\`.
+        *   Use bullet points for lists.
+        *   Place each equation and its explanation on separate lines for clarity.
+
+    **Example:**
+    If the original text was \`If the force is applied in the same direction as the displacement (\\theta = 0\\circ, \\cos\\theta = 1): W = Fd.\`, your output should be:
+    \`If the force is applied in the same direction as the displacement (***θ = 0°, cos(θ) = 1***):\`
+    \`***W = F × d***\`
+
+    ---
+
+    Now, generate a clear and well-structured study guide using markdown, following ALL of the rules above. The goal is depth, understanding, and perfect formatting.
+
+    Focus on these key concepts if they are provided: ${topic.key_points?.join(', ') || 'the main concepts of the topic'}.
 
     Please follow this general structure:
 
@@ -291,6 +342,27 @@ export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
 
     Your tone should be clear, educational, and authoritative. Start your response directly with the first heading. Do not include any introductory text before it.`;
     
+    // Check for Chrome's built-in AI and use it if available
+    if (typeof window.ai?.canCreateTextSession === 'function') {
+        try {
+            const canCreate = await window.ai.canCreateTextSession();
+            if (canCreate === 'readily') {
+                console.log("Using on-device AI for study notes.");
+                const session = await window.ai.createTextSession();
+                const result = await session.prompt(prompt);
+                if (result && result.trim().length > 20) {
+                    return result;
+                }
+                console.warn("On-device AI returned a short or empty response. Falling back to server-side AI.");
+            }
+        } catch (e) {
+            console.error("On-device AI error, falling back to server-side AI:", e);
+            // Fall through to the server-side implementation below
+        }
+    }
+
+    // Fallback to server-side Gemini API
+    console.log("Using server-side AI for study notes (fallback).");
     const MAX_RETRIES = 3;
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {

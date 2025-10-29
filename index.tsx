@@ -26,7 +26,6 @@ type TranscriptMessage = {
     id: number;
 }
 
-
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
   'text/plain',
@@ -420,17 +419,19 @@ const LoadingPage = ({ mode }: { mode: Mode | null }) => {
 };
 
 /**
- * Renders a string with markdown as HTML.
- * Handles headings (h1-h4), lists (*), bold (**), and a custom latex format ($$).
+ * Renders a string with markdown as styled HTML. It supports headers, lists,
+ * bold, italic, and bold-italic styling. This replaces the previous complex
+ * LaTeX parser with a simpler, more direct markdown implementation.
  */
 const MarkdownRenderer: React.FC<{ text?: string; className?: string }> = ({ text, className }) => {
     if (!text) return null;
 
+    // Process inline markdown styling (bold, italic, etc.)
     const renderInlines = (line: string) => {
-        // Process bold first, then latex
-        const withBold = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        const withLatex = withBold.replace(/\$(.*?)\$/g, '<span class="latex">$1</span>');
-        return withLatex;
+        return line
+            .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>') // Bold + Italic
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')       // Bold
+            .replace(/\*(.*?)\*/g, '<em>$1</em>');                  // Italic
     };
 
     const lines = text.split('\n');
@@ -439,32 +440,33 @@ const MarkdownRenderer: React.FC<{ text?: string; className?: string }> = ({ tex
 
     for (const line of lines) {
         const trimmedLine = line.trim();
-        
         if (trimmedLine.startsWith('#### ')) {
-             if (inList) { html += '</ul>'; inList = false; }
+            if (inList) { html += '</ul>'; inList = false; }
             html += `<h4>${renderInlines(trimmedLine.substring(5))}</h4>`;
         } else if (trimmedLine.startsWith('### ')) {
             if (inList) { html += '</ul>'; inList = false; }
             html += `<h3>${renderInlines(trimmedLine.substring(4))}</h3>`;
         } else if (trimmedLine.startsWith('## ')) {
-             if (inList) { html += '</ul>'; inList = false; }
+            if (inList) { html += '</ul>'; inList = false; }
             html += `<h2>${renderInlines(trimmedLine.substring(3))}</h2>`;
         } else if (trimmedLine.startsWith('# ')) {
-             if (inList) { html += '</ul>'; inList = false; }
+            if (inList) { html += '</ul>'; inList = false; }
             html += `<h1>${renderInlines(trimmedLine.substring(2))}</h1>`;
         } else if (trimmedLine.startsWith('* ')) {
             if (!inList) { html += '<ul>'; inList = true; }
             html += `<li>${renderInlines(trimmedLine.substring(2))}</li>`;
+        } else if (trimmedLine.match(/^---\s*$/)) { // Horizontal rule
+            if (inList) { html += '</ul>'; inList = false; }
+            html += '<hr />';
         } else {
             if (inList) { html += '</ul>'; inList = false; }
             if (trimmedLine) {
-                html += `<p>${renderInlines(line)}</p>`; // Use original line to preserve indentation for multiline paragraphs
+                html += `<p>${renderInlines(line)}</p>`;
             }
         }
     }
-    if (inList) {
-        html += '</ul>';
-    }
+
+    if (inList) { html += '</ul>'; }
 
     return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 };
