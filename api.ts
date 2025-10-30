@@ -202,7 +202,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
     // Use a single, robust `generateContent` call to get the study plan.
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: requestParts,
+        contents: { parts: requestParts },
         config: {
             responseMimeType: 'application/json',
             responseSchema: responseSchema,
