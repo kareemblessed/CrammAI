@@ -66,7 +66,6 @@ declare global {
 // The API key is read from the environment variable `process.env.API_KEY`.
 // This is configured in your hosting environment's settings.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-let chat: Chat | null = null;
 
 
 /**
@@ -167,13 +166,11 @@ export async function decodeAudioData(
 
 /**
  * Generates a study plan by analyzing user-uploaded files.
- * This also initializes the chat session for follow-up questions.
+ * Implements a retry mechanism to handle transient API errors.
  */
 export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<AnalysisResult> => {
     const fileParts = await Promise.all(files.map(file => fileToGenerativePart(file)));
     const prompt = getPromptForMode(mode);
-
-    // Combine files and prompt into a single request for the `generateContent` call.
     const requestParts = [...fileParts, { text: prompt }];
 
     const responseSchema = {
@@ -198,49 +195,48 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
             }
         }
     };
-    
-    // Use a single, robust `generateContent` call to get the study plan.
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: { parts: requestParts },
-        config: {
-            responseMimeType: 'application/json',
-            responseSchema: responseSchema,
-        },
-    });
 
-    let resultText = response.text?.trim();
-    if (!resultText) throw new Error("Received an empty response from the AI.");
-    
-    // Clean potential markdown code block fences
-    resultText = resultText.replace(/^```json\s*/, '').replace(/```$/, '');
+    const MAX_RETRIES = 3;
+    for (let i = 0; i < MAX_RETRIES; i++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: { parts: requestParts },
+                config: {
+                    responseMimeType: 'application/json',
+                    responseSchema: responseSchema,
+                },
+            });
 
-    const result = JSON.parse(resultText);
-    if (!result || !Array.isArray(result.study_these)) {
-        console.error("Invalid data structure received:", result);
-        throw new Error("The AI returned data in an unexpected format.");
+            let resultText = response.text?.trim();
+            if (!resultText) {
+                throw new Error("Received an empty response from the AI.");
+            }
+            
+            resultText = resultText.replace(/^```json\s*/, '').replace(/```$/, '');
+
+            const result = JSON.parse(resultText);
+            if (!result || !Array.isArray(result.study_these)) {
+                console.error("Invalid data structure received:", result);
+                throw new Error("The AI returned data in an unexpected format.");
+            }
+            
+            // On success, return the result and exit the loop
+            return result;
+        
+        } catch (error) {
+            console.error(`Attempt ${i + 1} failed for generating study plan:`, error);
+            if (i === MAX_RETRIES - 1) {
+                // Last attempt failed, re-throw to be handled by UI
+                throw error;
+            }
+            // Wait with exponential backoff before the next retry
+            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
     }
     
-    // --- CHAT INITIALIZATION ---
-    // Now that we have the first successful interaction, we can initialize the chat session.
-    // The history will be the user's initial request (files + prompt) and the model's response (the plan).
-    const hasAudio = files.some(file => file.type.startsWith('audio/'));
-    const audioInstruction = hasAudio ? "Pay special attention to the content from any audio recordings provided (e.g., lectures), as they contain crucial spoken details. When answering, if the information comes from an audio file, mention that it was from the 'lecture recording' or 'audio notes'." : "";
-
-    const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the documents provided by the user in our initial interaction. The topic is: ${result.study_these.map((t: Topic) => t.topic).join(', ')}. Do not use external knowledge unless the user explicitly asks for it. When asked a question, first state which document your answer is from (e.g., 'According to your syllabus...'), then provide a clear and concise answer. ${audioInstruction}`;
-
-    const history = [
-        { role: 'user', parts: requestParts },
-        { role: 'model', parts: [{ text: resultText }] }
-    ];
-
-    chat = ai.chats.create({
-        model: 'gemini-2.5-flash',
-        config: { systemInstruction },
-        history: history,
-    });
-    
-    return result;
+    // This part should be unreachable if the loop is correct, but serves as a final fallback.
+    throw new Error("Failed to generate study plan after multiple attempts.");
 };
 
 /**
@@ -517,12 +513,27 @@ End with a motivational note for their next study session.`;
 };
 
 /**
- * Handles follow-up questions using the initialized chat session, returning a stream.
+ * Creates a new, focused chat session based on a topic's study notes.
+ */
+export const apiCreateChatForTopic = (topic: Topic): Chat | null => {
+    if (!topic.notes) return null;
+    const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the provided study notes for the topic "${topic.topic}". Do not use external knowledge. Be concise and helpful. When asked about a concept, synthesize information from the notes provided. \n\nSTUDY NOTES:\n${topic.notes}`;
+
+    return ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction },
+        history: [],
+    });
+};
+
+
+/**
+ * Handles follow-up questions for a given chat session, returning a stream.
  * Supports multimodal (image) input.
  */
-export const apiChatWithDocumentsStream = async (message: string, imageFile?: File): Promise<AsyncGenerator<GenerateContentResponse>> => {
+export const apiChatWithDocumentsStream = async (chat: Chat, message: string, imageFile?: File): Promise<AsyncGenerator<GenerateContentResponse>> => {
     if (!chat) {
-        throw new Error("Chat not initialized. Please generate a study plan first.");
+        throw new Error("Chat not initialized.");
     }
 
     const wordLimit = imageFile ? 250 : 230;

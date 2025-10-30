@@ -4,13 +4,14 @@
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
-import type { LiveServerMessage } from '@google/genai';
+import type { LiveServerMessage, Chat } from '@google/genai';
 import {
     apiGenerateStudyPlan,
     apiGenerateStudyNotes,
     apiGenerateMnemonic,
     apiGeneratePracticeQuiz,
     apiGenerateQuizReflection,
+    apiCreateChatForTopic,
     apiChatWithDocumentsStream,
     apiConnectLiveTutor,
     createBlob,
@@ -710,17 +711,26 @@ const MnemonicStudio = ({ topic, onUpdateTopic }: {
 };
 
 
-const ChatStudio = () => {
+const ChatStudio = ({ topic }: { topic: Topic }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([
-        { role: 'model', text: "I'm ready! Ask me anything about your study materials." }
+        { role: 'model', text: "I've reviewed the notes for this topic. Ask me anything!" }
     ]);
     const [userInput, setUserInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [imageFile, setImageFile] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [chat, setChat] = useState<Chat | null>(null);
+    const [isInitializing, setIsInitializing] = useState(true);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setIsInitializing(true);
+        const chatInstance = apiCreateChatForTopic(topic);
+        setChat(chatInstance);
+        setIsInitializing(false);
+    }, [topic]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -754,7 +764,7 @@ const ChatStudio = () => {
     
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if ((!userInput.trim() && !imageFile) || isLoading) return;
+        if ((!userInput.trim() && !imageFile) || isLoading || !chat) return;
 
         const currentInput = userInput;
         const currentImageFile = imageFile;
@@ -774,7 +784,7 @@ const ChatStudio = () => {
         setIsLoading(true);
 
         try {
-            const stream = await apiChatWithDocumentsStream(currentInput, currentImageFile || undefined);
+            const stream = await apiChatWithDocumentsStream(chat, currentInput, currentImageFile || undefined);
 
             for await (const chunk of stream) {
                 const chunkText = chunk.text;
@@ -799,6 +809,8 @@ const ChatStudio = () => {
             setIsLoading(false);
         }
     };
+
+    const isInputDisabled = isLoading || isInitializing || !chat;
 
     return (
         <div className="study-section chat-studio">
@@ -835,6 +847,7 @@ const ChatStudio = () => {
                     onClick={() => imageInputRef.current?.click()} 
                     aria-label="Attach image"
                     title="Attach image"
+                    disabled={isInputDisabled}
                 >
                    🖼️
                 </button>
@@ -842,11 +855,11 @@ const ChatStudio = () => {
                     type="text"
                     value={userInput}
                     onChange={(e) => setUserInput(e.target.value)}
-                    placeholder="Ask about your documents..."
-                    disabled={isLoading}
+                    placeholder={isInitializing ? "Initializing chat..." : "Ask about the study notes..."}
+                    disabled={isInputDisabled}
                     aria-label="Chat input"
                 />
-                <button type="submit" disabled={isLoading || (!userInput.trim() && !imageFile)}>Send</button>
+                <button type="submit" disabled={isInputDisabled || (!userInput.trim() && !imageFile)}>Send</button>
             </form>
         </div>
     );
@@ -893,7 +906,7 @@ const StudyPage = ({ topic, onBack, updateTopicInList, onStartTutor }: {
                             <MarkdownRenderer text={topic.notes} className="notes-content" />
                         )}
                     </div>
-                    <ChatStudio />
+                    <ChatStudio topic={topic} />
                 </div>
                 <MnemonicStudio topic={topic} onUpdateTopic={updateTopicInList} />
             </div>
@@ -1184,12 +1197,12 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
                     },
                     onclose: () => {
                         setStatus('disconnected');
+                        addMessage('status', 'Tutor session has ended.');
                     },
                 });
                 
                 await sessionPromiseRef.current;
 
-            // FIX: Corrected syntax for catch block. The `=>` was invalid and caused numerous scope errors.
             } catch (err: any) {
                 console.error('Failed to start tutor session:', err);
                 setStatus('error');
@@ -1390,7 +1403,7 @@ const App = () => {
 
         } catch (e) {
             console.error(e);
-            setError("Sorry, I couldn't generate a study plan. The AI might be busy or an error occurred. Please try again.");
+            setError("Sorry, I couldn't generate a study plan after multiple attempts. The AI might be busy or there could be an issue with the uploaded files. Please try again later.");
             setView('upload'); // Go back to upload page on error
         }
     };
