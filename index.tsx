@@ -473,7 +473,7 @@ const MarkdownRenderer: React.FC<{ text?: string; className?: string }> = ({ tex
 };
 
 
-const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset, highlightedTopicName, setHighlightedTopicName }: {
+const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset, highlightedTopicName, setHighlightedTopicName, onRetryNotes }: {
     analysis: AnalysisResult | null;
     mode: Mode;
     onStudyTopic: (topic: Topic) => void;
@@ -481,6 +481,7 @@ const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset, highl
     onReset: () => void;
     highlightedTopicName: string | null;
     setHighlightedTopicName: (name: string | null) => void;
+    onRetryNotes: (topic: Topic) => void;
 }) => {
     const highlightedTopicRef = useRef<HTMLDivElement>(null);
 
@@ -550,21 +551,19 @@ const ResultsPage = ({ analysis, mode, onStudyTopic, onStartQuiz, onReset, highl
                                     )}
                                 </div>
                                 <div className="topic-actions">
-                                    <button
-                                        onClick={() => onStudyTopic(topic)}
-                                        className="study-button"
-                                        disabled={!topic.notes || topic.notes.startsWith('Error:')}
-                                    >
-                                        {!topic.notes ? (
-                                            <>
-                                                Generating Notes <div className="loading-spinner small-inline"></div>
-                                            </>
-                                        ) : topic.notes.startsWith('Error:') ? (
-                                            'Notes Failed'
-                                        ) : (
-                                            'Deep Dive →'
-                                        )}
-                                    </button>
+                                    {!topic.notes ? (
+                                        <button className="study-button" disabled>
+                                            Generating Notes <div className="loading-spinner small-inline"></div>
+                                        </button>
+                                    ) : topic.notes.startsWith('Error:') ? (
+                                        <button onClick={() => onRetryNotes(topic)} className="study-button">
+                                            Retry Notes 🔄
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => onStudyTopic(topic)} className="study-button">
+                                            Deep Dive →
+                                        </button>
+                                    )}
                                     <button onClick={() => onStartQuiz(topic)} className="study-button secondary">
                                         Practice Quiz 🧠
                                     </button>
@@ -1408,6 +1407,19 @@ const App = () => {
         }
     };
     
+    const handleRetryNotes = useCallback(async (topicToRetry: Topic) => {
+        // Show loading state for this specific topic by setting notes to undefined
+        updateTopicInList({ ...topicToRetry, notes: undefined });
+    
+        try {
+            const notes = await apiGenerateStudyNotes(topicToRetry);
+            updateTopicInList({ ...topicToRetry, notes });
+        } catch (e) {
+            console.error(`Failed to re-generate notes for topic: ${topicToRetry.topic}`, e);
+            updateTopicInList({ ...topicToRetry, notes: "Error: Could not generate study notes. Please try again." });
+        }
+    }, [updateTopicInList]);
+
     const handleStudyTopic = (topic: Topic) => {
         setCurrentTopic(topic);
         setView('study');
@@ -1496,6 +1508,7 @@ const App = () => {
                     onReset={handleReset}
                     highlightedTopicName={highlightedTopicName}
                     setHighlightedTopicName={setHighlightedTopicName}
+                    onRetryNotes={handleRetryNotes}
                 />;
             case 'study':
                 return <StudyPage 
