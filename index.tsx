@@ -27,6 +27,20 @@ type TranscriptMessage = {
     id: number;
 }
 
+type StoredFile = {
+    name: string;
+    size: number;
+    type: string;
+};
+
+type HistoryItem = {
+    id: string; // Using timestamp as a simple unique ID
+    timestamp: number;
+    mode: Mode;
+    files: StoredFile[];
+    analysis: AnalysisResult;
+};
+
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
   'text/plain',
@@ -1282,6 +1296,59 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
     );
 };
 
+const HistoryModal = ({ isOpen, history, onClose, onLoad, onDelete, onClearAll }: {
+    isOpen: boolean;
+    history: HistoryItem[];
+    onClose: () => void;
+    onLoad: (item: HistoryItem) => void;
+    onDelete: (id: string) => void;
+    onClearAll: () => void;
+}) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="history-overlay" role="dialog" aria-modal="true" aria-labelledby="history-title">
+            <div className="history-modal">
+                <header className="history-header">
+                    <h2 id="history-title">Study Plan History</h2>
+                    <button onClick={onClose} className="history-close-button" aria-label="Close history">&times;</button>
+                </header>
+                <div className="history-content">
+                    {history.length === 0 ? (
+                        <div className="history-empty-state">
+                            <p>You have no saved study plans.</p>
+                            <p>Generate a plan, and it will appear here!</p>
+                        </div>
+                    ) : (
+                        <ul className="history-list">
+                            {history.map(item => (
+                                <li key={item.id} className="history-item">
+                                    <div className="history-item-info">
+                                        <div className="history-item-mode">{getStatus(item.mode).modeIcon} {getStatus(item.mode).modeTitle}</div>
+                                        <div className="history-item-date">{new Date(item.timestamp).toLocaleString()}</div>
+                                        <div className="history-item-files">
+                                            <strong>Files:</strong> {item.files.map(f => f.name).join(', ')}
+                                        </div>
+                                    </div>
+                                    <div className="history-item-actions">
+                                        <button onClick={() => onLoad(item)} className="history-action-button load">Load</button>
+                                        <button onClick={() => onDelete(item.id)} className="history-action-button delete">Delete</button>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+                {history.length > 0 && (
+                    <footer className="history-footer">
+                        <button onClick={onClearAll} className="history-clear-all-button">Clear All History</button>
+                    </footer>
+                )}
+            </div>
+        </div>
+    );
+};
+
 
 const App = () => {
     // App state
@@ -1295,6 +1362,8 @@ const App = () => {
     const [quizSummary, setQuizSummary] = useState<{score: number, total: number, reflection: string} | null>(null);
     const [isTutorActive, setIsTutorActive] = useState(false);
     const [highlightedTopicName, setHighlightedTopicName] = useState<string | null>(null);
+    const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
     const theme = getStatus(mode);
     
@@ -1307,6 +1376,28 @@ const App = () => {
         root.style.setProperty('--dynamic-primary-trans', `${theme.primaryColor}50`);
     }, [theme]);
     
+    // Load history from localStorage on initial render
+    useEffect(() => {
+        try {
+            const savedHistory = localStorage.getItem('crammai_history');
+            if (savedHistory) {
+                setHistory(JSON.parse(savedHistory));
+            }
+        } catch (error) {
+            console.error("Failed to load history from localStorage", error);
+        }
+    }, []);
+
+    // Save history to localStorage whenever it changes
+    useEffect(() => {
+        try {
+            localStorage.setItem('crammai_history', JSON.stringify(history));
+        } catch (error)
+        {
+            console.error("Failed to save history to localStorage", error);
+        }
+    }, [history]);
+
     const handleReset = () => {
         setView('home');
         setMode(null);
@@ -1379,27 +1470,64 @@ const App = () => {
     const handleGeneratePlan = async () => {
         const validFiles = files.filter(f => f !== null) as File[];
         if (validFiles.length === 0 || !mode) return;
-
+    
         setView('loading');
         setError(null);
-
+    
         try {
+            // 1. Get the initial plan with topics but no notes.
             const initialAnalysis = await apiGenerateStudyPlan(mode, validFiles);
-            // Set the analysis first so the results page shows topics immediately
+    
+            // 2. Create a history item immediately so it appears in the list.
+            // This version is temporary and will be updated with full notes later.
+            const newHistoryItem: HistoryItem = {
+                id: Date.now().toString(),
+                timestamp: Date.now(),
+                mode: mode!,
+                // The analysis object is incomplete here, missing notes.
+                analysis: initialAnalysis,
+                files: validFiles.map(f => ({ name: f.name, size: f.size, type: f.type })),
+            };
+            // Persist the incomplete item for now so it appears in history immediately.
+            setHistory(prev => [newHistoryItem, ...prev]);
+    
+            // 3. Update the main UI to show the results page with topics.
             setAnalysis(initialAnalysis);
             setView('results');
-
-            // Asynchronously generate notes for each topic and update UI as they complete
-            initialAnalysis.study_these.forEach(async (topic) => {
+    
+            // 4. Asynchronously generate notes for all topics.
+            const topicsWithNotesPromises = initialAnalysis.study_these.map(async (topic) => {
                 try {
                     const notes = await apiGenerateStudyNotes(topic);
+                    // Update the live UI as notes come in for a better user experience.
                     updateTopicInList({ ...topic, notes });
+                    return { ...topic, notes }; // Return the complete topic
                 } catch (e) {
+                    const errorMessage = "Error: Could not generate study notes. Please try again.";
                     console.error(`Failed to generate notes for topic: ${topic.topic}`, e);
-                    updateTopicInList({ ...topic, notes: "Error: Could not generate study notes. Please try again." });
+                    // Update the live UI with the error message.
+                    updateTopicInList({ ...topic, notes: errorMessage });
+                    return { ...topic, notes: errorMessage }; // Return topic with error message
                 }
             });
-
+    
+            // Wait for all note generation promises to resolve.
+            const completedTopics = await Promise.all(topicsWithNotesPromises);
+    
+            // 5. Create the final, complete analysis object.
+            const finalAnalysis = { ...initialAnalysis, study_these: completedTopics };
+    
+            // 6. Update the specific history item with the complete analysis object.
+            setHistory(prevHistory => {
+                return prevHistory.map(item =>
+                    item.id === newHistoryItem.id
+                        ? { ...item, analysis: finalAnalysis }
+                        : item
+                );
+            });
+            // The useEffect on `history` will now save the complete item to localStorage,
+            // overwriting the temporary one.
+    
         } catch (e) {
             console.error(e);
             setError("Sorry, I couldn't generate a study plan after multiple attempts. The AI might be busy or there could be an issue with the uploaded files. Please try again later.");
@@ -1483,6 +1611,37 @@ const App = () => {
     const handleEndTutor = () => {
         setIsTutorActive(false);
     };
+    
+    // History Handlers
+    const handleOpenHistory = () => setIsHistoryModalOpen(true);
+    const handleCloseHistory = () => setIsHistoryModalOpen(false);
+
+    const handleLoadHistoryItem = (item: HistoryItem) => {
+        setMode(item.mode);
+        setAnalysis(item.analysis);
+        // We can't restore the full File objects, but this is enough for display purposes if needed.
+        // The core functionality relies on the restored `analysis` object.
+        const restoredFiles = item.files.map(f => new File([], f.name, { type: f.type }));
+        setFiles(prev => {
+            const newFiles = [null, null, null];
+            for (let i = 0; i < Math.min(restoredFiles.length, 3); i++) {
+                newFiles[i] = restoredFiles[i];
+            }
+            return newFiles;
+        });
+        setView('results');
+        handleCloseHistory();
+    };
+
+    const handleDeleteHistoryItem = (id: string) => {
+        setHistory(prev => prev.filter(item => item.id !== id));
+    };
+
+    const handleClearHistory = () => {
+        if (window.confirm("Are you sure you want to delete all saved study plans? This action cannot be undone.")) {
+            setHistory([]);
+        }
+    };
 
     const renderView = () => {
         switch (view) {
@@ -1544,6 +1703,9 @@ const App = () => {
             <div className="container">
                 <header className="app-header">
                     <CrammAIEmblem />
+                    <button className="history-button" onClick={handleOpenHistory} aria-label="View study plan history">
+                        History 📜
+                    </button>
                 </header>
                 <main>
                     {error && <div className="error-message">{error}</div>}
@@ -1553,6 +1715,14 @@ const App = () => {
             {isTutorActive && currentTopic && (
                 <LiveTutorView topic={currentTopic} onEndSession={handleEndTutor} />
             )}
+            <HistoryModal
+                isOpen={isHistoryModalOpen}
+                history={history}
+                onClose={handleCloseHistory}
+                onLoad={handleLoadHistoryItem}
+                onDelete={handleDeleteHistoryItem}
+                onClearAll={handleClearHistory}
+            />
         </>
     );
 };
