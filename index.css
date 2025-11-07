@@ -1397,34 +1397,6 @@ input[type="file"] {
     10%, 100% { transform: scaleX(1) rotate(-45deg); opacity: 0; }
 }
 
-/* --- AI Status Indicator --- */
-.ai-status-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.9rem;
-    padding: 6px 12px;
-    border-radius: 20px;
-    background-color: var(--glass-bg);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    cursor: default;
-    transition: all 0.2s ease;
-}
-
-.ai-status-indicator.available {
-    color: #a7f3d0; /* A light green */
-    border-color: #34d399; /* A stronger green */
-}
-
-.ai-status-icon {
-    font-size: 1rem;
-}
-
-.ai-status-text {
-    font-weight: 600;
-}
-
 @media (max-width: 900px) {
     .study-content-layout {
         grid-template-columns: 1fr;

@@ -26,7 +26,6 @@ type TranscriptMessage = {
     text: string;
     id: number;
 }
-type OnDeviceAIStatus = 'unknown' | 'available' | 'unavailable';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -1284,24 +1283,6 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
     );
 };
 
-const OnDeviceAIStatusIndicator = ({ status }: { status: OnDeviceAIStatus }) => {
-    if (status === 'unknown') {
-        return null; // Don't show anything while checking
-    }
-
-    const statusInfo = {
-        available: { icon: '✅', text: 'On-Device AI', className: 'available', title: 'Study notes are generated on your device for privacy and offline use.' },
-        unavailable: { icon: '☁️', text: 'Cloud AI', className: 'unavailable', title: 'Using cloud-based AI for note generation.' },
-    }[status];
-
-    return (
-        <div className={`ai-status-indicator ${statusInfo.className}`} title={statusInfo.title}>
-            <span className="ai-status-icon" aria-hidden="true">{statusInfo.icon}</span>
-            <span className="ai-status-text">{statusInfo.text}</span>
-        </div>
-    );
-};
-
 
 const App = () => {
     // App state
@@ -1315,7 +1296,6 @@ const App = () => {
     const [quizSummary, setQuizSummary] = useState<{score: number, total: number, reflection: string} | null>(null);
     const [isTutorActive, setIsTutorActive] = useState(false);
     const [highlightedTopicName, setHighlightedTopicName] = useState<string | null>(null);
-    const [onDeviceAIStatus, setOnDeviceAIStatus] = useState<OnDeviceAIStatus>('unknown');
 
     const theme = getStatus(mode);
     
@@ -1328,28 +1308,6 @@ const App = () => {
         root.style.setProperty('--dynamic-primary-trans', `${theme.primaryColor}50`);
     }, [theme]);
     
-    // Check for on-device AI availability
-    useEffect(() => {
-        const checkOnDeviceAI = async () => {
-            if (typeof window.ai?.canCreateTextSession === 'function') {
-                try {
-                    const canCreate = await window.ai.canCreateTextSession();
-                    if (canCreate === 'readily' || canCreate === 'after-prompt') {
-                        setOnDeviceAIStatus('available');
-                    } else {
-                        setOnDeviceAIStatus('unavailable');
-                    }
-                } catch (e) {
-                    console.error("Error checking for on-device AI:", e);
-                    setOnDeviceAIStatus('unavailable');
-                }
-            } else {
-                setOnDeviceAIStatus('unavailable');
-            }
-        };
-        checkOnDeviceAI();
-    }, []);
-
     const handleReset = () => {
         setView('home');
         setMode(null);
@@ -1573,7 +1531,6 @@ const App = () => {
             <div className="container">
                 <header className="app-header">
                     <CrammAIEmblem />
-                    <OnDeviceAIStatusIndicator status={onDeviceAIStatus} />
                 </header>
                 <main>
                     {error && <div className="error-message">{error}</div>}

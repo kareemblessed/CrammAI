@@ -344,16 +344,14 @@ export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
     if (typeof window.ai?.canCreateTextSession === 'function') {
         try {
             const canCreate = await window.ai.canCreateTextSession();
-            if (canCreate === 'readily' || canCreate === 'after-prompt') {
-                console.log(`Using on-device AI for study notes (status: ${canCreate}).`);
+            if (canCreate === 'readily') {
+                console.log("Using on-device AI for study notes.");
                 const session = await window.ai.createTextSession();
                 const result = await session.prompt(prompt);
                 if (result && result.trim().length > 20) {
                     return result;
                 }
                 console.warn("On-device AI returned a short or empty response. Falling back to server-side AI.");
-            } else {
-                 console.log(`On-device AI not available (status: ${canCreate}), falling back to server-side AI.`);
             }
         } catch (e) {
             console.error("On-device AI error, falling back to server-side AI:", e);
