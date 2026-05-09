@@ -266,13 +266,13 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
 
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
-            // Adaptive Truncation: If we failed previously with resource issues, try a smaller transcript
-            if (i > 1 && currentTranscript && currentTranscript.length > 10000) {
-                console.log("Reducing transcript size for retry to avoid quota limits.");
-                currentTranscript = currentTranscript.substring(0, 10000) + "... [Further truncated for retry]";
-                // Rebuild request parts with smaller transcript
+            // Adaptive Truncation: If we hit quota issues, try a smaller transcript immediately on next try
+            if (i > 0 && currentTranscript && currentTranscript.length > 5000) {
+                console.log(`Reducing transcript size for retry ${i} to avoid quota limits.`);
+                currentTranscript = currentTranscript.substring(0, 5000) + "... [Aggressively truncated for retry]";
+                // Rebuild request parts
                 requestParts = [...fileParts, { text: prompt }];
-                requestParts.unshift({ text: `YouTube Video Transcript Context (Reduced for Quota):\n${currentTranscript}` });
+                requestParts.unshift({ text: `YouTube Video Transcript Context (Reduced): \n${currentTranscript}` });
             }
 
             const response = await ai.models.generateContent({
@@ -311,7 +311,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
                     throw new Error("Gemini API Quota Exceeded (Free Tier). Because this YouTube video is long, it's hitting the limit. Please wait a minute and try again—the AI needs a moment to catch its breath!");
                 }
                 // Stronger backoff for quota errors
-                const delay = Math.pow(2, i) * 3000; 
+                const delay = Math.pow(2, i) * 5000; 
                 console.log(`Quota hit, waiting ${delay}ms before retry...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
