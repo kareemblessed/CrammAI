@@ -200,7 +200,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
+                model: 'gemini-3.1-pro-preview',
                 contents: { parts: requestParts },
                 config: {
                     responseMimeType: 'application/json',
@@ -257,7 +257,7 @@ ${topic.notes}
 `;
 
     const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-3.1-flash-live-preview',
         callbacks: callbacks,
         config: {
             responseModalities: [Modality.AUDIO],
@@ -365,7 +365,7 @@ export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-               model: 'gemini-2.5-flash',
+               model: 'gemini-3-flash-preview',
                contents: prompt,
             });
 
@@ -418,7 +418,7 @@ export const apiGenerateMnemonic = async (topic: string, previous_word?: string)
     const previousWordPrompt = previous_word ? `Please generate a different mnemonic word than "${previous_word}".` : '';
 
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3-flash-preview',
         contents: `Create a mnemonic for the topic: "${topic}". The mnemonic should be a single word, with each letter representing a key part of the topic. ${previousWordPrompt}`,
         config: {
             responseMimeType: "application/json",
@@ -470,7 +470,7 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
     };
 
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-pro-preview',
         contents: prompt,
         config: {
             responseMimeType: 'application/json',
@@ -505,7 +505,7 @@ End with a motivational note for their next study session.`;
     }
     
     const response = await ai.models.generateContent({
-       model: 'gemini-2.5-flash',
+       model: 'gemini-3-flash-preview',
        contents: prompt,
     });
 
@@ -520,7 +520,7 @@ export const apiCreateChatForTopic = (topic: Topic): Chat | null => {
     const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the provided study notes for the topic "${topic.topic}". Do not use external knowledge. Be concise and helpful. When asked about a concept, synthesize information from the notes provided. \n\nSTUDY NOTES:\n${topic.notes}`;
 
     return ai.chats.create({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3-flash-preview',
         config: { systemInstruction },
         history: [],
     });
