@@ -265,7 +265,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                model: 'gemini-1.5-flash-latest',
                 contents: { parts: requestParts },
                 config: config,
             });
@@ -292,12 +292,12 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
             // Check for specific error types to provide better feedback
             const errorMessage = error.message || String(error);
             
-            if (errorMessage.includes("RESOURCE_EXHAUSTED") || errorMessage.includes("credits are depleted")) {
-                throw new Error("The AI's usage limit or billing credits have been exhausted. Please check your Gemini API billing status.");
+            if (errorMessage.includes("RESOURCE_EXHAUSTED") || errorMessage.includes("credits are depleted") || errorMessage.includes("quota")) {
+                throw new Error("The AI's usage limit or billing credits have been exhausted. This often happens on the free tier if the input (like a long YouTube video) is too large. Please check your Gemini API billing status or try a shorter video/smaller document.");
             }
 
-            if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized")) {
-                 throw new Error("Gemini API Key is invalid or missing. If you deployed to Vercel, make sure you added the 'GEMINI_API_KEY' environment variable.");
+            if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized") || errorMessage.includes("401") || errorMessage.includes("403")) {
+                 throw new Error("Gemini API Key is invalid or missing. Since you are on Vercel, you MUST add an environment variable named 'GEMINI_API_KEY' in your project settings and re-deploy.");
             }
             
             if (i === MAX_RETRIES - 1) {
@@ -331,7 +331,7 @@ ${topic.notes}
 `;
 
     const sessionPromise = ai.live.connect({
-        model: 'gemini-3.1-flash-live-preview',
+        model: 'gemini-2.0-flash-exp',
         callbacks: callbacks,
         config: {
             responseModalities: [Modality.AUDIO],
@@ -439,7 +439,7 @@ export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-               model: 'gemini-3-flash-preview',
+               model: 'gemini-1.5-flash-latest',
                contents: prompt,
             });
 
@@ -492,7 +492,7 @@ export const apiGenerateMnemonic = async (topic: string, previous_word?: string)
     const previousWordPrompt = previous_word ? `Please generate a different mnemonic word than "${previous_word}".` : '';
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash-latest',
         contents: `Create a mnemonic for the topic: "${topic}". The mnemonic should be a single word, with each letter representing a key part of the topic. ${previousWordPrompt}`,
         config: {
             responseMimeType: "application/json",
@@ -544,7 +544,7 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
     };
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash-latest',
         contents: prompt,
         config: {
             responseMimeType: 'application/json',
@@ -579,7 +579,7 @@ End with a motivational note for their next study session.`;
     }
     
     const response = await ai.models.generateContent({
-       model: 'gemini-3-flash-preview',
+       model: 'gemini-1.5-flash-latest',
        contents: prompt,
     });
 
@@ -594,7 +594,7 @@ export const apiCreateChatForTopic = (topic: Topic): Chat | null => {
     const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the provided study notes for the topic "${topic.topic}". Do not use external knowledge. Be concise and helpful. When asked about a concept, synthesize information from the notes provided. \n\nSTUDY NOTES:\n${topic.notes}`;
 
     return ai.chats.create({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash-latest',
         config: { systemInstruction },
         history: [],
     });
