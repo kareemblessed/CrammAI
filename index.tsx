@@ -1560,9 +1560,10 @@ const App = () => {
             // The useEffect on `history` will now save the complete item to localStorage,
             // overwriting the temporary one.
     
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
-            setError("Sorry, I couldn't generate a study plan after multiple attempts. The AI might be busy or there could be an issue with the uploaded files. Please try again later.");
+            const msg = e.message || "The AI might be busy or there could be an issue with the uploaded files.";
+            setError(`Sorry, I couldn't generate a study plan. ${msg}`);
             setView('upload'); // Go back to upload page on error
         }
     };

@@ -63,10 +63,13 @@ declare global {
 
 
 // --- API INITIALIZATION & HELPERS ---
+const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY || "";
 
-// The API key is read from the environment variable `process.env.API_KEY`.
-// This is configured in your hosting environment's settings.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+if (!API_KEY && typeof window !== 'undefined') {
+    console.error("Gemini API Key is missing. If you are on Vercel, please add API_KEY to your environment variables.");
+}
+
+const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 
 /**
@@ -283,11 +286,18 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
             // On success, return the result and exit the loop
             return result;
         
-        } catch (error) {
+        } catch (error: any) {
             console.error(`Attempt ${i + 1} failed for generating study plan:`, error);
+            
+            // Check for specific error types to provide better feedback
+            const errorMessage = error.message || String(error);
+            if (errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized")) {
+                 throw new Error("Gemini API Key is invalid or missing. If you deployed to Vercel, make sure you added the 'API_KEY' environment variable.");
+            }
+            
             if (i === MAX_RETRIES - 1) {
-                // Last attempt failed, re-throw to be handled by UI
-                throw error;
+                // Last attempt failed, re-throw with as much info as possible
+                throw new Error(`AI Generation Error: ${errorMessage}`);
             }
             // Wait with exponential backoff before the next retry
             await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));

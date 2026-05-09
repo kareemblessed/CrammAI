@@ -7,10 +7,9 @@ import { YoutubeTranscript } from 'youtube-transcript';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
+async function createServer() {
   const app = express();
-  const PORT = 3000;
-
+  
   // Middleware to parse JSON
   app.use(express.json());
 
@@ -24,8 +23,6 @@ async function startServer() {
 
     try {
       console.log(`Fetching transcript for videoId: ${videoId}`);
-      // The library doesn't always handle headers well in all environments, 
-      // but we try to provide a clean request.
       const transcript = await YoutubeTranscript.fetchTranscript(videoId);
       
       if (!transcript || transcript.length === 0) {
@@ -81,9 +78,21 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  return app;
+}
+
+// For local development and standard Node.js environments
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  createServer().then(app => {
+    const PORT = 3000;
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   });
 }
 
-startServer();
+// Export the creation function for Vercel
+export default async (req: any, res: any) => {
+  const app = await createServer();
+  return app(req, res);
+};

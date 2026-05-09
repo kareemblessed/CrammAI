@@ -1,6 +1,6 @@
 {
   "name": "CrammAI",
-  "description": "An empty app",
+  "description": "An AI-powered study co-pilot that generates prioritized study plans, notes, and interactive quizzes from documents and YouTube videos.",
   "requestFramePermissions": [
     "microphone"
   ],
