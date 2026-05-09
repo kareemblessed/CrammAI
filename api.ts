@@ -261,9 +261,20 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
         config.tools = [{ googleSearch: {} }];
     }
 
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
+    let currentTranscript = youtubeTranscript;
+
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
+            // Adaptive Truncation: If we failed previously with resource issues, try a smaller transcript
+            if (i > 1 && currentTranscript && currentTranscript.length > 10000) {
+                console.log("Reducing transcript size for retry to avoid quota limits.");
+                currentTranscript = currentTranscript.substring(0, 10000) + "... [Further truncated for retry]";
+                // Rebuild request parts with smaller transcript
+                requestParts = [...fileParts, { text: prompt }];
+                requestParts.unshift({ text: `YouTube Video Transcript Context (Reduced for Quota):\n${currentTranscript}` });
+            }
+
             const response = await ai.models.generateContent({
                 model: 'gemini-3-flash-preview',
                 contents: { parts: requestParts },
@@ -289,11 +300,21 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
         } catch (error: any) {
             console.error(`Attempt ${i + 1} failed for generating study plan:`, error);
             
-            // Check for specific error types to provide better feedback
             const errorMessage = error.message || String(error);
-            
-            if (errorMessage.includes("RESOURCE_EXHAUSTED") || errorMessage.includes("credits are depleted") || errorMessage.includes("quota")) {
-                throw new Error("The AI's usage limit or billing credits have been exhausted. This often happens on the free tier if the input (like a long YouTube video) is too large. Please check your Gemini API billing status or try a shorter video/smaller document.");
+            const isQuotaError = errorMessage.includes("RESOURCE_EXHAUSTED") || 
+                               errorMessage.includes("credits are depleted") || 
+                               errorMessage.includes("quota") || 
+                               errorMessage.includes("429");
+
+            if (isQuotaError) {
+                if (i === MAX_RETRIES - 1) {
+                    throw new Error("Gemini API Quota Exceeded (Free Tier). Because this YouTube video is long, it's hitting the limit. Please wait a minute and try again—the AI needs a moment to catch its breath!");
+                }
+                // Stronger backoff for quota errors
+                const delay = Math.pow(2, i) * 3000; 
+                console.log(`Quota hit, waiting ${delay}ms before retry...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
             }
 
             if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized") || errorMessage.includes("401") || errorMessage.includes("403")) {
@@ -301,10 +322,9 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
             }
             
             if (i === MAX_RETRIES - 1) {
-                // Last attempt failed, re-throw with as much info as possible
                 throw new Error(`AI Generation Error: ${errorMessage}`);
             }
-            // Wait with exponential backoff before the next retry
+            // Standard backoff
             await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
         }
     }
