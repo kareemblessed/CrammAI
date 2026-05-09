@@ -14,6 +14,7 @@ import {
     apiCreateChatForTopic,
     apiChatWithDocumentsStream,
     apiConnectLiveTutor,
+    apiFetchYoutubeTranscript,
     createBlob,
     decode,
     decodeAudioData,
@@ -38,6 +39,7 @@ type HistoryItem = {
     timestamp: number;
     mode: Mode;
     files: StoredFile[];
+    youtubeUrl?: string;
     analysis: AnalysisResult;
 };
 
@@ -351,9 +353,11 @@ const HomePage = ({ onSelectMode }: { onSelectMode: (mode: Mode) => void }) => (
 );
 
 
-const UploadPage = ({ mode, files, onBack, addFile, onRemoveFile, onGeneratePlan }: {
+const UploadPage = ({ mode, files, youtubeUrl, setYoutubeUrl, onBack, addFile, onRemoveFile, onGeneratePlan }: {
     mode: Mode;
     files: (File | null)[];
+    youtubeUrl: string;
+    setYoutubeUrl: (url: string) => void;
     onBack: () => void;
     addFile: (file: File, index: number) => void;
     onRemoveFile: (index: number) => void;
@@ -361,7 +365,7 @@ const UploadPage = ({ mode, files, onBack, addFile, onRemoveFile, onGeneratePlan
 }) => {
     const { statusText, encouragingMessage } = getStatus(mode);
     const activeSlotIndex = files.findIndex(f => f === null);
-    const isGenerateDisabled = files.every(f => f === null);
+    const isGenerateDisabled = files.every(f => f === null) && !youtubeUrl.trim();
 
     return (
         <section className="view-container">
@@ -388,6 +392,19 @@ const UploadPage = ({ mode, files, onBack, addFile, onRemoveFile, onGeneratePlan
                         />
                     ))}
                 </div>
+
+                <div className="youtube-upload-section">
+                    <h3 className="youtube-upload-title">Or paste a YouTube URL 🎬</h3>
+                    <input 
+                        type="text" 
+                        className="youtube-input"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        value={youtubeUrl}
+                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                        aria-label="YouTube URL input"
+                    />
+                </div>
+
                 <div className="smart-suggestions">
                     <div className="suggestion-title">💡 What should you upload?</div>
                     <div className="suggestions">
@@ -1188,7 +1205,7 @@ const LiveTutorView = ({ topic, onEndSession }: { topic: Topic; onEndSession: ()
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
                             sessionPromiseRef.current.then((session: any) => {
-                                session.sendRealtimeInput({ media: pcmBlob });
+                                session.sendRealtimeInput({ audio: pcmBlob });
                             });
                         };
                         
@@ -1327,7 +1344,9 @@ const HistoryModal = ({ isOpen, history, onClose, onLoad, onDelete, onClearAll }
                                         <div className="history-item-mode">{getStatus(item.mode).modeIcon} {getStatus(item.mode).modeTitle}</div>
                                         <div className="history-item-date">{new Date(item.timestamp).toLocaleString()}</div>
                                         <div className="history-item-files">
-                                            <strong>Files:</strong> {item.files.map(f => f.name).join(', ')}
+                                            {item.files.length > 0 && <><strong>Files:</strong> {item.files.map(f => f.name).join(', ')}</>}
+                                            {item.files.length > 0 && item.youtubeUrl && <br />}
+                                            {item.youtubeUrl && <><strong>YouTube:</strong> <span className="history-yt-link">{item.youtubeUrl}</span></>}
                                         </div>
                                     </div>
                                     <div className="history-item-actions">
@@ -1355,6 +1374,7 @@ const App = () => {
     const [view, setView] = useState<View>('home');
     const [mode, setMode] = useState<Mode | null>(null);
     const [files, setFiles] = useState<(File | null)[]>([null, null, null]);
+    const [youtubeUrl, setYoutubeUrl] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
     const [currentTopic, setCurrentTopic] = useState<Topic | null>(null);
@@ -1402,6 +1422,7 @@ const App = () => {
         setView('home');
         setMode(null);
         setFiles([null, null, null]);
+        setYoutubeUrl('');
         setError(null);
         setAnalysis(null);
         setCurrentTopic(null);
@@ -1469,29 +1490,40 @@ const App = () => {
 
     const handleGeneratePlan = async () => {
         const validFiles = files.filter(f => f !== null) as File[];
-        if (validFiles.length === 0 || !mode) return;
+        if (!mode || (validFiles.length === 0 && !youtubeUrl.trim())) return;
     
         setView('loading');
         setError(null);
     
         try {
+            let ytTranscript: string | undefined = undefined;
+            if (youtubeUrl.trim()) {
+                try {
+                    ytTranscript = await apiFetchYoutubeTranscript(youtubeUrl);
+                } catch (ytError) {
+                    console.warn("Transcript fetching unavailable, switching to Search Grounding fallback.", ytError);
+                    // We don't throw anymore unless it's a critical error and we have no other source.
+                    // If we have files, we definitely continue.
+                    // If we only have a YT link, we try to let Gemini handle it with search.
+                }
+            }
+
             // 1. Get the initial plan with topics but no notes.
-            const initialAnalysis = await apiGenerateStudyPlan(mode, validFiles);
+            const initialAnalysis = await apiGenerateStudyPlan(mode, validFiles, youtubeUrl.trim() || undefined, ytTranscript);
     
             // 2. Create a history item immediately so it appears in the list.
-            // This version is temporary and will be updated with full notes later.
             const newHistoryItem: HistoryItem = {
                 id: Date.now().toString(),
                 timestamp: Date.now(),
                 mode: mode!,
-                // The analysis object is incomplete here, missing notes.
                 analysis: initialAnalysis,
                 files: validFiles.map(f => ({ name: f.name, size: f.size, type: f.type })),
+                youtubeUrl: youtubeUrl.trim() || undefined,
             };
             // Persist the incomplete item for now so it appears in history immediately.
             setHistory(prev => [newHistoryItem, ...prev]);
     
-            // 3. Update the main UI to show the results page with topics.
+            // 3. Update the main UI to show the results page.
             setAnalysis(initialAnalysis);
             setView('results');
     
@@ -1619,6 +1651,7 @@ const App = () => {
     const handleLoadHistoryItem = (item: HistoryItem) => {
         setMode(item.mode);
         setAnalysis(item.analysis);
+        setYoutubeUrl(item.youtubeUrl || '');
         // We can't restore the full File objects, but this is enough for display purposes if needed.
         // The core functionality relies on the restored `analysis` object.
         const restoredFiles = item.files.map(f => new File([], f.name, { type: f.type }));
@@ -1651,6 +1684,8 @@ const App = () => {
                 return <UploadPage 
                     mode={mode!}
                     files={files}
+                    youtubeUrl={youtubeUrl}
+                    setYoutubeUrl={setYoutubeUrl}
                     onBack={handleBackToHome}
                     addFile={handleAddFile}
                     onRemoveFile={handleRemoveFile}

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import { GoogleGenAI, Part, Type, Chat, LiveServerMessage, Modality, Blob, GenerateContentResponse } from "@google/genai";
+// import { YoutubeTranscript } from 'youtube-transcript'; // Moved to server-side to avoid CORS
 
 // --- TYPE DEFINITIONS ---
 export type Mode = 'calm' | 'warn' | 'zoom';
@@ -162,16 +163,67 @@ export async function decodeAudioData(
 }
 
 
+/**
+ * Extracts the YouTube Video ID from various URL formats.
+ */
+export const extractYoutubeId = (url: string): string | null => {
+    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[7].length === 11) ? match[7] : null;
+};
+
+/**
+ * Fetches the transcript for a given YouTube URL.
+ * Now calls the local server endpoint to avoid CORS issues.
+ */
+export const apiFetchYoutubeTranscript = async (url: string): Promise<string> => {
+    const videoId = extractYoutubeId(url);
+    if (!videoId) {
+        throw new Error("Invalid YouTube URL. Please provide a valid link.");
+    }
+
+    try {
+        const response = await fetch(`/api/transcript?videoId=${videoId}`);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || "Failed to fetch transcript.");
+        }
+        const data = await response.json();
+        return data.transcript;
+    } catch (error) {
+        // We log as a warning because we have a search grounding fallback in place.
+        console.warn("YouTube transcript unavailable (falling back to search grounding):", error);
+        if (error instanceof Error) {
+            throw error;
+        }
+        throw new Error("Could not fetch transcript for this video.");
+    }
+};
+
+
 // --- API FUNCTIONS ---
 
 /**
- * Generates a study plan by analyzing user-uploaded files.
+ * Generates a study plan by analyzing user-uploaded files and optional YouTube transcript.
  * Implements a retry mechanism to handle transient API errors.
  */
-export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<AnalysisResult> => {
+export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl?: string, youtubeTranscript?: string): Promise<AnalysisResult> => {
     const fileParts = await Promise.all(files.map(file => fileToGenerativePart(file)));
     const prompt = getPromptForMode(mode);
-    const requestParts = [...fileParts, { text: prompt }];
+    
+    let requestParts: any[] = [...fileParts, { text: prompt }];
+    let useGrounding = false;
+
+    if (youtubeTranscript) {
+        requestParts.unshift({ text: `YouTube Video Transcript Context:\n${youtubeTranscript}` });
+    } else if (youtubeUrl) {
+        // If we have a URL but no transcript, we signal the AI to use search grounding
+        useGrounding = true;
+        requestParts.unshift({ 
+            text: `No transcript available for this video: ${youtubeUrl}. \n` +
+                  `IMPORTANT: Use your Google Search capability to research the content of this specific YouTube video and incorporate its key points into the study plan and notes.`
+        });
+    }
 
     const responseSchema = {
         type: Type.OBJECT,
@@ -196,16 +248,23 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[]): Promise<A
         }
     };
 
+    const config: any = {
+        responseMimeType: 'application/json',
+        responseSchema: responseSchema,
+    };
+
+    // Add Search Grounding if necessary
+    if (useGrounding) {
+        config.tools = [{ googleSearch: {} }];
+    }
+
     const MAX_RETRIES = 3;
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
                 model: 'gemini-3.1-pro-preview',
                 contents: { parts: requestParts },
-                config: {
-                    responseMimeType: 'application/json',
-                    responseSchema: responseSchema,
-                },
+                config: config,
             });
 
             let resultText = response.text?.trim();
