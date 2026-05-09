@@ -63,13 +63,13 @@ declare global {
 
 
 // --- API INITIALIZATION & HELPERS ---
-const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY || "";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
-if (!API_KEY && typeof window !== 'undefined') {
-    console.error("Gemini API Key is missing. If you are on Vercel, please add API_KEY to your environment variables.");
+if (!GEMINI_API_KEY && typeof window !== 'undefined') {
+    console.error("Gemini API Key is missing. Please add 'GEMINI_API_KEY' to your environment variables.");
 }
 
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 
 /**
@@ -265,7 +265,7 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-                model: 'gemini-3.1-pro-preview',
+                model: 'gemini-3-flash-preview',
                 contents: { parts: requestParts },
                 config: config,
             });
@@ -291,8 +291,13 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
             
             // Check for specific error types to provide better feedback
             const errorMessage = error.message || String(error);
-            if (errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized")) {
-                 throw new Error("Gemini API Key is invalid or missing. If you deployed to Vercel, make sure you added the 'API_KEY' environment variable.");
+            
+            if (errorMessage.includes("RESOURCE_EXHAUSTED") || errorMessage.includes("credits are depleted")) {
+                throw new Error("The AI's usage limit or billing credits have been exhausted. Please check your Gemini API billing status.");
+            }
+
+            if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("API_KEY") || errorMessage.includes("apiKey") || errorMessage.includes("unauthorized")) {
+                 throw new Error("Gemini API Key is invalid or missing. If you deployed to Vercel, make sure you added the 'GEMINI_API_KEY' environment variable.");
             }
             
             if (i === MAX_RETRIES - 1) {
@@ -539,7 +544,7 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
     };
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3.1-pro-preview',
+        model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
             responseMimeType: 'application/json',
