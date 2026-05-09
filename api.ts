@@ -266,13 +266,13 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
 
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
-            // Adaptive Truncation: If we hit quota issues, try a smaller transcript immediately on next try
-            if (i > 0 && currentTranscript && currentTranscript.length > 5000) {
-                console.log(`Reducing transcript size for retry ${i} to avoid quota limits.`);
-                currentTranscript = currentTranscript.substring(0, 5000) + "... [Aggressively truncated for retry]";
+            // Adaptive Truncation: If we hit quota issues, try a very small transcript immediately on next try
+            if (i > 0 && currentTranscript && currentTranscript.length > 3000) {
+                console.log(`Aggressively reducing transcript size for retry ${i} to bypass quota limits.`);
+                currentTranscript = currentTranscript.substring(0, 3000) + "... [Minimal transcript for quota recovery]";
                 // Rebuild request parts
                 requestParts = [...fileParts, { text: prompt }];
-                requestParts.unshift({ text: `YouTube Video Transcript Context (Reduced): \n${currentTranscript}` });
+                requestParts.unshift({ text: `Context: \n${currentTranscript}` });
             }
 
             const response = await ai.models.generateContent({
@@ -308,10 +308,10 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
 
             if (isQuotaError) {
                 if (i === MAX_RETRIES - 1) {
-                    throw new Error("Gemini API Quota Exceeded (Free Tier). Because this YouTube video is long, it's hitting the limit. Please wait a minute and try again—the AI needs a moment to catch its breath!");
+                    throw new Error("Gemini API Quota Exceeded. This YouTube video is likely too long for the free tier's current speed limits. Please try again in 2 minutes, or try a shorter video.");
                 }
                 // Stronger backoff for quota errors
-                const delay = Math.pow(2, i) * 5000; 
+                const delay = Math.pow(2, i) * 6000; 
                 console.log(`Quota hit, waiting ${delay}ms before retry...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
