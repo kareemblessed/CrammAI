@@ -33,10 +33,11 @@ async function createServer() {
       }
 
       const text = transcript.map(t => t.text).join(' ');
-      const MAX_TRANSCRIPT_CHARS = 7000;
+      const MAX_TRANSCRIPT_CHARS = 5000;
       const truncatedText = text.length > MAX_TRANSCRIPT_CHARS 
-          ? text.substring(0, MAX_TRANSCRIPT_CHARS) + " [Transcript truncated for size...]"
+          ? text.substring(0, MAX_TRANSCRIPT_CHARS) + " [Transcript shortened to fit within free API limits...]"
           : text;
+      console.log(`Transcript fetched and truncated to ${truncatedText.length} chars.`);
       res.json({ transcript: truncatedText });
     } catch (error: any) {
       const errorMessage = error.message || String(error);

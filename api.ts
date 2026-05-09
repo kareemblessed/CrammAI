@@ -63,10 +63,12 @@ declare global {
 
 
 // --- API INITIALIZATION & HELPERS ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_API_KEY = ((import.meta as any).env?.VITE_GEMINI_API_KEY as string) || (process.env.GEMINI_API_KEY as string) || "";
 
-if (!GEMINI_API_KEY && typeof window !== 'undefined') {
-    console.error("Gemini API Key is missing. Please add 'GEMINI_API_KEY' to your environment variables.");
+if (!GEMINI_API_KEY) {
+    console.warn("GEMINI_API_KEY is missing. If you are on Vercel, you should add VITE_GEMINI_API_KEY to your environment variables to support client-side AI calls, or ideally use a server-side proxy.");
+} else {
+    console.log("Gemini API Key detected.");
 }
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -276,8 +278,8 @@ export const apiGenerateStudyPlan = async (mode: Mode, files: File[], youtubeUrl
             }
 
             const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
-                contents: { parts: requestParts },
+                model: 'gemini-1.5-flash',
+                contents: [{ role: 'user', parts: requestParts }],
                 config: config,
             });
 
@@ -459,8 +461,8 @@ export const apiGenerateStudyNotes = async (topic: Topic): Promise<string> => {
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await ai.models.generateContent({
-               model: 'gemini-3-flash-preview',
-               contents: prompt,
+               model: 'gemini-1.5-flash',
+               contents: [{ role: 'user', parts: [{ text: prompt }] }],
             });
 
             const text = response.text;
@@ -512,8 +514,8 @@ export const apiGenerateMnemonic = async (topic: string, previous_word?: string)
     const previousWordPrompt = previous_word ? `Please generate a different mnemonic word than "${previous_word}".` : '';
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Create a mnemonic for the topic: "${topic}". The mnemonic should be a single word, with each letter representing a key part of the topic. ${previousWordPrompt}`,
+        model: 'gemini-1.5-flash',
+        contents: [{ role: 'user', parts: [{ text: `Create a mnemonic for the topic: "${topic}". The mnemonic should be a single word, with each letter representing a key part of the topic. ${previousWordPrompt}` }] }],
         config: {
             responseMimeType: "application/json",
             responseSchema: responseSchema,
@@ -564,8 +566,8 @@ export const apiGeneratePracticeQuiz = async (topic: Topic): Promise<QuizQuestio
     };
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
+        model: 'gemini-1.5-flash',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
             responseMimeType: 'application/json',
             responseSchema: responseSchema,
@@ -599,8 +601,8 @@ End with a motivational note for their next study session.`;
     }
     
     const response = await ai.models.generateContent({
-       model: 'gemini-3-flash-preview',
-       contents: prompt,
+       model: 'gemini-1.5-flash',
+       contents: [{ role: 'user', parts: [{ text: prompt }] }],
     });
 
     return response.text;
@@ -614,7 +616,7 @@ export const apiCreateChatForTopic = (topic: Topic): Chat | null => {
     const systemInstruction = `You are an expert study assistant. Your primary role is to answer questions based *only* on the provided study notes for the topic "${topic.topic}". Do not use external knowledge. Be concise and helpful. When asked about a concept, synthesize information from the notes provided. \n\nSTUDY NOTES:\n${topic.notes}`;
 
     return ai.chats.create({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash',
         config: { systemInstruction },
         history: [],
     });

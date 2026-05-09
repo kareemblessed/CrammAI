@@ -1527,24 +1527,26 @@ const App = () => {
             setAnalysis(initialAnalysis);
             setView('results');
     
-            // 4. Asynchronously generate notes for all topics.
-            const topicsWithNotesPromises = initialAnalysis.study_these.map(async (topic) => {
+            // 4. Sequentially generate notes for all topics to avoid hitting RPM limits.
+            const completedTopics: Topic[] = [];
+            for (const topic of initialAnalysis.study_these) {
                 try {
+                    // Small delay between calls to be safe with RPM
+                    if (completedTopics.length > 0) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
                     const notes = await apiGenerateStudyNotes(topic);
-                    // Update the live UI as notes come in for a better user experience.
-                    updateTopicInList({ ...topic, notes });
-                    return { ...topic, notes }; // Return the complete topic
+                    const updatedTopic = { ...topic, notes };
+                    updateTopicInList(updatedTopic);
+                    completedTopics.push(updatedTopic);
                 } catch (e) {
                     const errorMessage = "Error: Could not generate study notes. Please try again.";
                     console.error(`Failed to generate notes for topic: ${topic.topic}`, e);
-                    // Update the live UI with the error message.
-                    updateTopicInList({ ...topic, notes: errorMessage });
-                    return { ...topic, notes: errorMessage }; // Return topic with error message
+                    const errorTopic = { ...topic, notes: errorMessage };
+                    updateTopicInList(errorTopic);
+                    completedTopics.push(errorTopic);
                 }
-            });
-    
-            // Wait for all note generation promises to resolve.
-            const completedTopics = await Promise.all(topicsWithNotesPromises);
+            }
     
             // 5. Create the final, complete analysis object.
             const finalAnalysis = { ...initialAnalysis, study_these: completedTopics };
